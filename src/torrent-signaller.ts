@@ -16,7 +16,7 @@ export class TorrentSignaller {
   on_message?: TorrentSignalHandler;
 
   constructor(opts?: TorrentSignalOpts) {
-    // NOTE: Port for conneciton is 32625
+    // NOTE: Port for connection is 32625
     this.url = this.get_ws_url();
 
     if (opts?.auto_connect) this.connect();

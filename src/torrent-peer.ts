@@ -5,6 +5,7 @@ import {
   TorrentMessageObject,
   TorrentPeerEntry,
   TorrentSignalMessage,
+  TorrentControlSeederOrFurrow,
 } from "./torrent-types";
 import { TorrentUtils } from "./torrent-utils";
 
@@ -14,8 +15,9 @@ export class TorrentPeer {
 
   // map of remote peer id -> PeerEntry
   private peers: Map<string, TorrentPeerEntry> = new Map();
-  private bound_seeders: Set<string> = new Set();
-  private bound_furrows: Set<string> = new Set();
+  // map [seeder_id, seeder_name] -> [furrow_id, furrow_name][]
+  private broker_bindings: Map<[string, string], Set<[string, string]>> =
+    new Map();
 
   private signaller: TorrentSignaller;
   private utils: TorrentUtils = new TorrentUtils();
@@ -51,49 +53,53 @@ export class TorrentPeer {
     return { pc, dc };
   }
 
-  register_remote_binding(seeder_id: string, furrow_id?: string) {
-    this.bound_seeders.add(seeder_id);
-    if (furrow_id) this.bound_furrows.add(furrow_id);
+  register_remote_binding(
+    seeder: TorrentControlSeederOrFurrow,
+    furrow?: TorrentControlSeederOrFurrow,
+  ) {
+    this._bind_seeder_or_furrow(seeder, furrow);
 
     const control: TorrentControlMessage = {
       type: "ANNOUNCE_BIND",
       peer_id: this.identifier,
-      seeder_id,
-      furrow_id,
+      seeder,
+      furrow,
     };
 
     this._broadcast_control(control);
   }
 
-  unregister_remote_binding(seeder_id: string, furrow_id?: string) {
-    this.bound_seeders.delete(seeder_id);
-    if (furrow_id) this.bound_furrows.delete(furrow_id);
+  unregister_remote_binding(
+    seeder: TorrentControlSeederOrFurrow,
+    furrow?: TorrentControlSeederOrFurrow,
+  ) {
+    this._bind_seeder_or_furrow(seeder, furrow);
 
     const control: TorrentControlMessage = {
       type: "ANNOUNCE_UNBIND",
       peer_id: this.identifier,
-      seeder_id,
-      furrow_id,
+      seeder,
+      furrow,
     };
 
     this._broadcast_control(control);
   }
 
   publish(msg: {
-    seeder_id: string;
-    furrow_id?: string;
+    seeder: TorrentControlSeederOrFurrow;
+    furrow?: TorrentControlSeederOrFurrow;
     message?: TorrentMessageObject;
   }) {
     const control: TorrentControlMessage = {
       type: "PUBLISH",
       peer_id: this.identifier,
-      seeder_id: msg.seeder_id,
-      furrow_id: msg.furrow_id,
+      seeder: msg.seeder,
+      furrow: msg?.furrow,
       message: msg.message,
     };
 
     // send to all connected peers via datachannels if available
-    for (const [pid, entry] of this.peers.entries()) {
+    for (const [, entry] of this.peers.entries()) {
       if (entry.dc && entry.dc.readyState === "open") {
         entry.dc.send(JSON.stringify(control));
       }
@@ -112,12 +118,15 @@ export class TorrentPeer {
     this.peers.delete(remote_id);
   }
 
-  find(seeder_name: string, furrow_name?: string) {
+  find(
+    seeder: TorrentControlSeederOrFurrow,
+    furrow?: TorrentControlSeederOrFurrow,
+  ) {
     const control: TorrentControlMessage = {
       type: "FIND",
       peer_id: this.identifier,
-      seeder_name,
-      furrow_name,
+      seeder,
+      furrow,
     };
 
     this._find_seeder_or_furrow(control);
@@ -166,16 +175,36 @@ export class TorrentPeer {
   private _attach_dc_handlers(dc: RTCDataChannel, remote_id: string) {
     dc.onopen = () => {
       // announce binds for currently bound seeders when channel opens
-      for (const seeder_id of this.bound_seeders) {
+      for (const [seeder, furrow_set] of this.broker_bindings) {
+        const [seeder_id, seeder_name] = seeder;
+
         const announce: TorrentControlMessage = {
           type: "ANNOUNCE_BIND",
           peer_id: this.identifier,
-          seeder_id,
+          seeder: { id: seeder_id, name: seeder_name },
         };
-        try {
-          dc.send(JSON.stringify(announce));
-        } catch (e) {
-          console.warn("failed to send announce", e);
+
+        if (furrow_set.size > 0) {
+          for (const [furrow_id, furrow_name] of furrow_set) {
+            const announceWithFurrow = {
+              ...announce,
+              furrow: { id: furrow_id, name: furrow_name },
+            };
+            try {
+              dc.send(JSON.stringify(announceWithFurrow));
+            } catch (e) {
+              console.warn("Failed to send announce for furrow", e);
+            }
+          }
+        } else {
+          try {
+            dc.send(JSON.stringify(announce));
+          } catch (e) {
+            console.warn(
+              "Failed to send announce for seeder without furrows",
+              e,
+            );
+          }
         }
       }
     };
@@ -207,8 +236,6 @@ export class TorrentPeer {
       case "ICE":
         return this._handle_ice(msg);
       case "RELAY_CONTROL":
-        return this._handle_control_message(msg.control, msg.from);
-      case "FIND":
         return this._handle_control_message(msg.control, msg.from);
     }
   }
@@ -284,16 +311,16 @@ export class TorrentPeer {
     switch (control.type) {
       case "ANNOUNCE_BIND": {
         const set =
-          this.remote_bindings.get(control.seeder_id) ?? new Set<string>();
+          this.remote_bindings.get(control.seeder.id) ?? new Set<string>();
         set.add(control.peer_id);
-        this.remote_bindings.set(control.seeder_id, set);
+        this.remote_bindings.set(control.seeder.id, set);
         break;
       }
       case "ANNOUNCE_UNBIND": {
-        const set = this.remote_bindings.get(control.seeder_id);
+        const set = this.remote_bindings.get(control.seeder.id);
         if (set) {
           set.delete(control.peer_id);
-          if (set.size === 0) this.remote_bindings.delete(control.seeder_id);
+          if (set.size === 0) this.remote_bindings.delete(control.seeder.id);
         }
         break;
       }
@@ -324,7 +351,7 @@ export class TorrentPeer {
     // naive local delivery: if routing_key is empty or equals our identifier then deliver
     if (!routing_key || routing_key === this.identifier) {
       const tmsg = new TorrentMessage(
-        msg.seeder_id as any,
+        msg.seeder.id as any,
         msg.message?.body ?? null,
       );
       tmsg.properties = msg.message?.properties ?? {};
@@ -336,7 +363,7 @@ export class TorrentPeer {
 
   private _find_seeder_or_furrow(control: TorrentControlMessage) {
     const msg: TorrentSignalMessage = {
-      type: "FIND",
+      type: "RELAY_CONTROL",
       from: this.identifier,
       control,
     };
@@ -354,7 +381,49 @@ export class TorrentPeer {
   private _search_seeder_or_furrow(
     control: TorrentControlMessage,
     from_peer_id?: string,
-  ) {}
+  ) {
+    if (control.type !== "FIND") return;
+    const seeder_req: [string, string] = [
+      control.seeder.id,
+      control.seeder.name,
+    ];
+
+    if (this.broker_bindings.has(seeder_req)) {
+      if (control.furrow) {
+        const furrow_req: [string, string] = [
+          control.furrow.id,
+          control.furrow.name,
+        ];
+        const furrow_set = this.broker_bindings.get(seeder_req);
+        if (furrow_set && furrow_set.has(furrow_req)) {
+          //Return message that furrow is found for this seeder
+        }
+      } else {
+        //Return message that seeder was found
+      }
+    }
+  }
+
+  private _bind_seeder_or_furrow(
+    seeder: TorrentControlSeederOrFurrow,
+    furrow?: TorrentControlSeederOrFurrow,
+  ) {
+    // Check if the seeder already has an entry in the map
+    const seeder_key: [string, string] = [seeder.id, seeder.name];
+    let furrow_set = this.broker_bindings.get(seeder_key);
+
+    if (!furrow_set) {
+      // If no furrows are bound to this seeder yet, create a new Set
+      furrow_set = new Set();
+      this.broker_bindings.set(seeder_key, furrow_set);
+    }
+
+    // If a furrow is provided, add the furrow to the set for this seeder
+    if (furrow?.id && furrow?.name) {
+      const furrowKey: [string, string] = [furrow.id, furrow.name];
+      furrow_set.add(furrowKey);
+    }
+  }
 
   // overridable hook
   on_message_received?(msg: TorrentMessage): void;

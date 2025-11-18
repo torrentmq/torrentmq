@@ -102,13 +102,31 @@ export class TorrentFurrow {
 
   private bind_to_peer(peer: TorrentPeer) {
     if (!this.peers.includes(peer)) this.peers.push(peer);
-    peer.register_remote_binding(this.seeder.identifier, this.identifier);
+    peer.register_remote_binding(
+      {
+        id: this.seeder.identifier,
+        name: this.seeder.name,
+      },
+      {
+        id: this.identifier,
+        name: this.name,
+      },
+    );
   }
 
   unbind() {
     for (const p of this.peers) {
       if (!this.peers.includes(p)) this.peers.push(p);
-      p.register_remote_binding(this.seeder.identifier, this.identifier);
+      p.register_remote_binding(
+        {
+          id: this.seeder.identifier,
+          name: this.seeder.name,
+        },
+        {
+          id: this.identifier,
+          name: this.name,
+        },
+      );
     }
   }
 }

@@ -56,34 +56,28 @@ export type TorrentMessageParams = {
   on_ack?: TorrentCallBack;
 };
 
+export type TorrentControlSeederOrFurrow = {
+  id: string;
+  name: string;
+};
+
+type TorrentControlPeerInfo = {
+  peer_id: string;
+  seeder: TorrentControlSeederOrFurrow;
+  furrow?: TorrentControlSeederOrFurrow;
+};
+
 export type TorrentControlMessage =
-  | {
-      type: "ANNOUNCE_BIND";
-      peer_id: string;
-      seeder_id: string;
-      furrow_id?: string;
-    }
-  | {
-      type: "ANNOUNCE_UNBIND";
-      peer_id: string;
-      seeder_id: string;
-      furrow_id?: string;
-    }
-  | {
+  | (TorrentControlPeerInfo & { type: "ANNOUNCE_BIND" })
+  | (TorrentControlPeerInfo & { type: "ANNOUNCE_UNBIND" })
+  | (TorrentControlPeerInfo & {
       type: "PUBLISH";
-      peer_id: string;
-      seeder_id: string;
-      furrow_id?: string;
       message?: TorrentMessageObject;
-    }
-  | {
-      type: "FIND";
-      peer_id: string;
-      seeder_name: string;
-      furrow_name: string;
-    }
+    })
+  | (TorrentControlPeerInfo & { type: "FIND" })
   | { type: "ACK"; peer_id: string; message_id: string };
 
+// Signal message for WebRTC
 export type TorrentSignalMessage =
   | { type: "OFFER"; from: string; to?: string; sdp: RTCSessionDescriptionInit }
   | { type: "ANSWER"; from: string; to: string; sdp: RTCSessionDescriptionInit }
@@ -93,14 +87,7 @@ export type TorrentSignalMessage =
       from: string;
       to?: string;
       control: TorrentControlMessage;
-    }
-  | {
-      type: "FIND";
-      from: string;
-      to?: string;
-      control: TorrentControlMessage;
     };
-
 export type TorrentSignalHandler = (msg: TorrentSignalMessage) => void;
 
 export type TorrentSignalOpts = { auto_connect?: boolean };

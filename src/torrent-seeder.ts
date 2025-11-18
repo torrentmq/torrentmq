@@ -43,7 +43,7 @@ export class TorrentSeeder {
     this.peer = rtc_client;
 
     if (options?.auto_plant) this.plant();
-    this.peer.register_remote_binding(this.identifier);
+    this.peer.register_remote_binding({ id: this.identifier, name: this.name });
 
     return this;
   }
@@ -89,9 +89,19 @@ export class TorrentSeeder {
 
     if (!this.peer) throw new Error("Seeder requires a peer to send");
     this.peer.publish({
-      seeder_id: this.identifier,
-      furrow_id: furrow?.identifier,
       message: { body },
+      seeder: {
+        id: this.identifier,
+        name: this.name,
+      },
+      ...(furrow
+        ? {
+            furrow: {
+              id: furrow.identifier,
+              name: furrow.name,
+            },
+          }
+        : {}),
     });
   }
 
