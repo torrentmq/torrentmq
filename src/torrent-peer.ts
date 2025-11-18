@@ -1,3 +1,4 @@
+import { TorrentError } from "./torrent-error";
 import { TorrentMessage } from "./torrent-message";
 import { TorrentSignaller } from "./torrent-signaller";
 import {
@@ -6,6 +7,7 @@ import {
   TorrentPeerEntry,
   TorrentSignalMessage,
   TorrentControlSeederOrFurrow,
+  TorrentEventName,
 } from "./torrent-types";
 import { TorrentUtils } from "./torrent-utils";
 
@@ -18,6 +20,8 @@ export class TorrentPeer {
   // map [seeder_id, seeder_name] -> [furrow_id, furrow_name][]
   private broker_bindings: Map<[string, string], Set<[string, string]>> =
     new Map();
+  // all possible events
+  private _events: Map<TorrentEventName, Set<(data: any) => void>> = new Map();
 
   private signaller: TorrentSignaller;
   private utils: TorrentUtils = new TorrentUtils();
@@ -34,9 +38,10 @@ export class TorrentPeer {
     this.signaller.on_message = (m) => this._handle_signal_message(m);
   }
 
-  async connect_to_peer(remote_id: string) {
+  async connect_to_peer() {
     // create a new PeerConnection and send an OFFER
-    const { pc, dc } = this._create_peer_connection(remote_id, true);
+    const { pc, dc } = this._create_peer_connection(this.identifier, true);
+    this._emit("PEER_CONNECTED", { pc, dc });
 
     // create an offer and send it
     const offer = await pc.createOffer();
@@ -45,7 +50,7 @@ export class TorrentPeer {
     const msg: TorrentSignalMessage = {
       type: "OFFER",
       from: this.identifier,
-      to: remote_id,
+      to: this.identifier,
       sdp: offer,
     };
     this.signaller.send(msg);
@@ -116,6 +121,30 @@ export class TorrentPeer {
       entry.pc.close();
     } catch (e) {}
     this.peers.delete(remote_id);
+  }
+
+  on(
+    event:
+      | TorrentEventName
+      | Partial<Record<TorrentEventName, (payload: any) => void>>,
+    handler?: (payload: any) => void,
+  ) {
+    if (typeof event === "object") {
+      for (const [evt, fn] of Object.entries(event)) {
+        this.on(evt as TorrentEventName, fn);
+      }
+      return;
+    }
+
+    if (!handler) {
+      throw new TorrentError("Handler must be provided for on(event, handler)");
+    }
+
+    if (!this._events.has(event)) {
+      this._events.set(event, new Set());
+    }
+
+    this._events.get(event)!.add(handler);
   }
 
   find(
@@ -340,12 +369,17 @@ export class TorrentPeer {
         break;
       }
       case "FOUND": {
+        this._emit("FOUND", {
+          seeder: control.seeder,
+          furrow: control?.furrow,
+        });
         this.register_remote_binding(control.seeder, control?.furrow);
         break;
       }
     }
   }
 
+  // TODO: fix _handle_publish to send to external peers
   private _handle_publish(
     msg: Extract<TorrentControlMessage, { type: "PUBLISH" }>,
   ) {
@@ -358,14 +392,11 @@ export class TorrentPeer {
 
     // naive local delivery: if routing_key is empty or equals our identifier then deliver
     if (!routing_key || routing_key === this.identifier) {
-      const tmsg = new TorrentMessage(
-        msg.seeder.id as any,
-        msg.message?.body ?? null,
-      );
+      const tmsg = new TorrentMessage(msg.message?.body ?? null);
       tmsg.properties = msg.message?.properties ?? {};
       // user of TorrentPeer should register callbacks to receive tmsg
       // e.g. an event emitter or overrideable method
-      this.on_message_received?.(tmsg);
+      this._emit("PUBLISH", msg);
     }
   }
 
@@ -444,6 +475,15 @@ export class TorrentPeer {
     }
   }
 
-  // overridable hook
-  on_message_received?(msg: TorrentMessage): void;
+  private _emit(event: TorrentEventName, payload: any) {
+    const handlers = this._events.get(event);
+    if (!handlers) return;
+    for (const h of handlers) {
+      try {
+        h(payload);
+      } catch (err) {
+        console.warn("Error in event handler for", event, err);
+      }
+    }
+  }
 }

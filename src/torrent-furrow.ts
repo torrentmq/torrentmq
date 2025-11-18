@@ -98,6 +98,7 @@ export class TorrentFurrow {
     for (const p of this.peers) {
       this.bind_to_peer(p);
     }
+    this.is_bound = true;
   }
 
   private bind_to_peer(peer: TorrentPeer) {
@@ -128,5 +129,7 @@ export class TorrentFurrow {
         },
       );
     }
+
+    this.is_bound = false;
   }
 }

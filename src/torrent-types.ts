@@ -1,7 +1,4 @@
-import { TorrentFurrow } from "./torrent-furrow";
 import { TorrentMessage } from "./torrent-message";
-import { TorrentPeer } from "./torrent-peer";
-import { TorrentSeeder } from "./torrent-seeder";
 
 type SeederFurrowSharedParams = {
   passive?: boolean;
@@ -43,8 +40,14 @@ export type TorrentMessageBody =
   | object
   | null;
 
+export type TorrentMessageHeaders = {
+  hop_count?: number;
+  content_type?: string;
+  retry_count?: number;
+};
+
 export type TorrentMessageProperties = {
-  headers?: Record<string, any>;
+  headers?: TorrentMessageHeaders;
   routing_key?: string;
   message_id?: string;
   re_delivered?: boolean;
@@ -55,6 +58,17 @@ export type TorrentMessageParams = {
   routing_key?: string;
   on_ack?: TorrentCallBack;
 };
+
+export type TorrentEventName =
+  | "PEER_CONNECTED"
+  | "PEER_DISCONNECTED"
+  | "ANNOUNCE_BIND"
+  | "ANNOUNCE_UNBIND"
+  | "PUBLISH"
+  | "FIND"
+  | "FOUND"
+  | "NOT_FOUND"
+  | "ACK";
 
 export type TorrentControlSeederOrFurrow = {
   id: string;
@@ -76,6 +90,7 @@ export type TorrentControlMessage =
     })
   | (TorrentControlPeerInfo & { type: "FIND" })
   | (TorrentControlPeerInfo & { type: "FOUND" })
+  | (TorrentControlPeerInfo & { type: "NOT_FOUND" })
   | { type: "ACK"; peer_id: string; message_id: string };
 
 // Signal message for WebRTC

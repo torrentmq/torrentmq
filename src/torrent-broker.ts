@@ -5,7 +5,7 @@ import { TorrentSeederParams } from "./torrent-types";
 
 export class TorrentBroker {
   private seeders: TorrentSeeder[] = [];
-  rtc_client: TorrentPeer | undefined;
+  private rtc_client: TorrentPeer | undefined;
   rtc_connected: boolean = false;
 
   constructor() {
@@ -14,7 +14,11 @@ export class TorrentBroker {
 
   connect() {
     this.rtc_client = new TorrentPeer();
-    this.rtc_connected = true;
+    this.rtc_client.on({
+      PEER_CONNECTED: () => (this.rtc_connected = true),
+      PEER_DISCONNECTED: () => (this.rtc_connected = false),
+    });
+    this.rtc_client.connect_to_peer();
   }
 
   seeder(
