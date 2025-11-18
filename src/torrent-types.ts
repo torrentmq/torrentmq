@@ -75,6 +75,7 @@ export type TorrentControlMessage =
       message?: TorrentMessageObject;
     })
   | (TorrentControlPeerInfo & { type: "FIND" })
+  | (TorrentControlPeerInfo & { type: "FOUND" })
   | { type: "ACK"; peer_id: string; message_id: string };
 
 // Signal message for WebRTC
@@ -88,6 +89,7 @@ export type TorrentSignalMessage =
       to?: string;
       control: TorrentControlMessage;
     };
+
 export type TorrentSignalHandler = (msg: TorrentSignalMessage) => void;
 
 export type TorrentSignalOpts = { auto_connect?: boolean };

@@ -286,7 +286,10 @@ export class TorrentPeer {
     }
   }
 
-  private _broadcast_control(control: TorrentControlMessage) {
+  private _broadcast_control(
+    control: TorrentControlMessage,
+    to_peer_id?: string,
+  ) {
     // send RELAY_CONTROL via signaller so the signalling server can route it
     const relay: TorrentSignalMessage = {
       type: "RELAY_CONTROL",
@@ -334,6 +337,11 @@ export class TorrentPeer {
       }
       case "FIND": {
         this._search_seeder_or_furrow(control, from_peer_id);
+        break;
+      }
+      case "FOUND": {
+        this.register_remote_binding(control.seeder, control?.furrow);
+        break;
       }
     }
   }
@@ -383,24 +391,35 @@ export class TorrentPeer {
     from_peer_id?: string,
   ) {
     if (control.type !== "FIND") return;
-    const seeder_req: [string, string] = [
-      control.seeder.id,
-      control.seeder.name,
-    ];
 
-    if (this.broker_bindings.has(seeder_req)) {
+    const fnd_msg: TorrentControlMessage = {
+      type: "FOUND",
+      peer_id: this.identifier,
+      seeder: undefined as any, // fill in later
+    };
+
+    for (const [seeder_entry, furrow_set] of this.broker_bindings) {
+      const [real_seeder_id, real_seeder_name] = seeder_entry;
+
+      if (real_seeder_name !== control.seeder.name) continue;
+      fnd_msg.seeder = {
+        id: real_seeder_id,
+        name: real_seeder_name,
+      };
+
       if (control.furrow) {
-        const furrow_req: [string, string] = [
-          control.furrow.id,
-          control.furrow.name,
-        ];
-        const furrow_set = this.broker_bindings.get(seeder_req);
-        if (furrow_set && furrow_set.has(furrow_req)) {
-          //Return message that furrow is found for this seeder
+        const req_furrow_name = control.furrow.name;
+
+        for (const [real_furrow_id, real_furrow_name] of furrow_set) {
+          if (real_furrow_name === req_furrow_name) {
+            fnd_msg.furrow = {
+              id: real_furrow_id,
+              name: real_furrow_name,
+            };
+          }
         }
-      } else {
-        //Return message that seeder was found
       }
+      this._broadcast_control(fnd_msg, from_peer_id);
     }
   }
 
