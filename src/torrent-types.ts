@@ -109,7 +109,7 @@ export type TorrentControlMessage =
 
 // Signal message for WebRTC
 export type TorrentSignalMessage =
-  | { type: "HELO"; from: string }
+  | { type: "HELO"; from: string; to?: string }
   | { type: "SIGNALLER"; identifier: string }
   | { type: "OFFER"; from: string; to?: string; sdp: RTCSessionDescriptionInit }
   | { type: "ANSWER"; from: string; to: string; sdp: RTCSessionDescriptionInit }

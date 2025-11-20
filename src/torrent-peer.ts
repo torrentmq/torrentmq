@@ -294,27 +294,11 @@ export class TorrentPeer {
 
   private _handle_signal_message(msg: TorrentSignalMessage) {
     // ignore our own messages (except for signaller identify)
-    if (
-      (msg.type !== "SIGNALLER" && (msg as any).from === this.identifier) ||
-      (msg as any).identifier === this.identifier
-    )
-      return;
-
-    // HELO auto-discovery: when a peer broadcasts HELO we start initiating a connection to them
-    // Accept both a custom HELO shape and generic SIGNALLER ident messages (backwards compatibility)
-    if ((msg as any).type === "HELO" && (msg as any).from) {
-      const from = (msg as any).from as string;
-      if (from === this.identifier) return;
-      // if we already have a connection to them, ignore
-      if (this.peers.has(from)) return;
-      // create pc + dc and send OFFER
-      this._initiate_connection_to_peer(from).catch((e) =>
-        console.warn("failed to initiate connection", e),
-      );
-      return;
-    }
+    if (msg.type !== "SIGNALLER" && msg.from === this.identifier) return;
 
     switch (msg.type) {
+      case "HELO":
+        return this._handle_helo(msg);
       case "OFFER":
         return this._handle_offer(
           msg as Extract<TorrentSignalMessage, { type: "OFFER" }>,
@@ -327,9 +311,6 @@ export class TorrentPeer {
         return this._handle_ice(
           msg as Extract<TorrentSignalMessage, { type: "ICE" }>,
         );
-      case "SIGNALLER":
-        // server identity; ignore or handle if needed
-        return;
       default:
         // ignore unknown or control messages coming over websocket - we want control over DC only
         return;
@@ -623,6 +604,33 @@ export class TorrentPeer {
     }
 
     if (msg?.furrow && furrow) this._emit("MESSAGE_RECEIVE", msg);
+  }
+
+  private _handle_helo(msg: TorrentSignalMessage) {
+    // HELO auto-discovery: when a peer broadcasts HELO we start initiating a connection to them
+    // Accept both a custom HELO shape and generic SIGNALLER ident messages (backwards compatibility)
+    if (msg.type === "HELO" && msg.from) {
+      const from = msg.from as string;
+      if (from === this.identifier) return;
+      if (msg?.to && msg.to !== this.identifier) return;
+      // if we already have a connection to them, ignore
+      if (this.peers.has(from)) return;
+      // they might not have discovered this peer so say "HELO"
+      if (msg.from !== this.identifier) {
+        const hello_broadcast: TorrentSignalMessage = {
+          type: "HELO",
+          from: this.identifier,
+          to: msg.from,
+        };
+        this.signaller.send(hello_broadcast);
+      }
+
+      // create pc + dc and send OFFER
+      this._initiate_connection_to_peer(from).catch((e) =>
+        console.warn("failed to initiate connection", e),
+      );
+      return;
+    }
   }
 
   private _search_seeder_or_furrow(
