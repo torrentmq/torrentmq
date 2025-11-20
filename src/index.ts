@@ -1,8 +1,8 @@
-export { TorrentMQ } from "./torrent-mq";
-export { TorrentMessage } from "./torrent-message";
 export { TorrentBroker } from "./torrent-broker";
-export { TorrentPeer } from "./torrent-peer";
-export { TorrentFurrow } from "./torrent-furrow";
-export { TorrentSeeder } from "./torrent-seeder";
 export { TorrentError } from "./torrent-error";
+export { TorrentFurrow } from "./torrent-furrow";
+export { TorrentMessage } from "./torrent-message";
+export { TorrentPeer } from "./torrent-peer";
+export { TorrentSeeder } from "./torrent-seeder";
+export { TorrentSignaller } from "./torrent-signaller";
 export * from "./torrent-types";

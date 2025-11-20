@@ -10,9 +10,13 @@ import {
 } from "./torrent-types";
 import { TorrentUtils } from "./torrent-utils";
 
+// bind is seeder to furrow (seeder is parent)
+// subscribe is furrow to client
+
 export class TorrentFurrow {
-  private peers: TorrentPeer[] = [];
-  private is_bound: boolean = false;
+  private peers: Map<string, { routing_key: string; is_bound: boolean }> =
+    new Map();
+  private peer: TorrentPeer;
   private is_planted: boolean = false;
   private utils: TorrentUtils = new TorrentUtils();
 
@@ -45,7 +49,12 @@ export class TorrentFurrow {
     this.name = name ?? this.utils.random_string();
     this.options = options ?? {};
     this.seeder = seeder;
-    this.peers.push(rtc_client);
+    this.peer = rtc_client;
+    if (options?.exclusive && this.peers.size < 1)
+      this.peers.set(rtc_client.identifier, {
+        routing_key: rtc_client.identifier,
+        is_bound: false,
+      });
 
     if (options?.auto_plant) this.plant();
     if (options?.auto_bind) this.bind();
@@ -90,46 +99,26 @@ export class TorrentFurrow {
       if (this.utils.is_message_params(arg2)) params = arg2;
     }
 
-    if (!this.peers) throw new Error("Seeder requires a peer to send");
+    if (!this.peers) throw new TorrentError("Seeder requires a peer to send");
+    if (this.peers.size === 0)
+      throw new TorrentError("Cannot send: no peers connected");
     this.seeder.send(body, params, this);
   }
 
-  bind() {
-    for (const p of this.peers) {
-      this.bind_to_peer(p);
-    }
-    this.is_bound = true;
-  }
-
-  private bind_to_peer(peer: TorrentPeer) {
-    if (!this.peers.includes(peer)) this.peers.push(peer);
-    peer.register_remote_binding(
-      {
-        id: this.seeder.identifier,
-        name: this.seeder.name,
-      },
-      {
-        id: this.identifier,
-        name: this.name,
-      },
-    );
+  bind(routing_key?: string) {
+    this.peers.set(this.peer.identifier, {
+      routing_key: routing_key ? routing_key : this.peer.identifier,
+      is_bound: true,
+    });
   }
 
   unbind() {
-    for (const p of this.peers) {
-      if (!this.peers.includes(p)) this.peers.push(p);
-      p.register_remote_binding(
-        {
-          id: this.seeder.identifier,
-          name: this.seeder.name,
-        },
-        {
-          id: this.identifier,
-          name: this.name,
-        },
-      );
-    }
+    const data = this.peers.get(this.peer.identifier);
+    if (!data) return;
 
-    this.is_bound = false;
+    this.peers.set(this.peer.identifier, {
+      ...data,
+      is_bound: false,
+    });
   }
 }

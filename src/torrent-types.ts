@@ -4,7 +4,6 @@ type SeederFurrowSharedParams = {
   passive?: boolean;
   durable?: boolean;
   auto_delete?: boolean;
-  auto_plant?: boolean;
 };
 
 export type TorrentSeederParams = SeederFurrowSharedParams & {
@@ -16,6 +15,7 @@ export type TorrentSeederParams = SeederFurrowSharedParams & {
 export type TorrentFurrowParams = SeederFurrowSharedParams & {
   exclusive?: boolean;
   auto_bind?: boolean;
+  auto_plant?: boolean;
 };
 
 export type TorrentConsumeParams = {
@@ -26,6 +26,8 @@ export type TorrentConsumeParams = {
 };
 
 export type TorrentCallBack = (message: TorrentMessage) => void;
+
+export type TorrentAckCallBack = (data: any) => void;
 
 export type TorrentMessageObject = {
   body?: TorrentMessageBody;
@@ -56,16 +58,18 @@ export type TorrentMessageProperties = {
 
 export type TorrentMessageParams = {
   routing_key?: string;
-  on_ack?: TorrentCallBack;
+  on_ack?: TorrentAckCallBack;
 };
 
 export type TorrentEventName =
   | "PEER_CONNECTED"
   | "PEER_DISCONNECTED"
-  | "ANNOUNCE_BIND"
-  | "ANNOUNCE_UNBIND"
+  | "BIND"
+  | "UNBIND"
+  | "PEER_BIND"
+  | "PEER_UNBIND"
   | "PUBLISH"
-  | "FIND"
+  | "MESSAGE_RECEIVE"
   | "FOUND"
   | "NOT_FOUND"
   | "ACK";
@@ -95,6 +99,10 @@ export type TorrentControlMessage =
 
 // Signal message for WebRTC
 export type TorrentSignalMessage =
+  | {
+      type: "SIGNALLER";
+      identifier: string;
+    }
   | { type: "OFFER"; from: string; to?: string; sdp: RTCSessionDescriptionInit }
   | { type: "ANSWER"; from: string; to: string; sdp: RTCSessionDescriptionInit }
   | { type: "ICE"; from: string; to?: string; candidate: RTCIceCandidateInit }
@@ -106,8 +114,6 @@ export type TorrentSignalMessage =
     };
 
 export type TorrentSignalHandler = (msg: TorrentSignalMessage) => void;
-
-export type TorrentSignalOpts = { auto_connect?: boolean };
 
 export type TorrentPeerEntry = {
   pc: RTCPeerConnection;

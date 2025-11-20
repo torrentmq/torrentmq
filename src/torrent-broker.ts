@@ -12,13 +12,13 @@ export class TorrentBroker {
     return this;
   }
 
-  connect() {
+  async connect() {
     this.rtc_client = new TorrentPeer();
     this.rtc_client.on({
       PEER_CONNECTED: () => (this.rtc_connected = true),
       PEER_DISCONNECTED: () => (this.rtc_connected = false),
     });
-    this.rtc_client.connect_to_peer();
+    await this.rtc_client.connect_to_peer();
   }
 
   seeder(

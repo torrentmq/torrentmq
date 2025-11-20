@@ -1,9 +1,8 @@
 import { TorrentError } from "./torrent-error";
 import { TorrentFurrow } from "./torrent-furrow";
+import { TorrentMessage } from "./torrent-message";
 import { TorrentPeer } from "./torrent-peer";
 import {
-  TorrentCallBack,
-  TorrentConsumeParams,
   TorrentFurrowParams,
   TorrentMessageBody,
   TorrentMessageParams,
@@ -13,7 +12,6 @@ import { TorrentUtils } from "./torrent-utils";
 
 export class TorrentSeeder {
   private peer: TorrentPeer;
-  private is_planted: boolean = false;
   private furrows: TorrentFurrow[] = [];
   private utils: TorrentUtils = new TorrentUtils();
 
@@ -42,34 +40,9 @@ export class TorrentSeeder {
     this.options = options ?? {};
     this.peer = rtc_client;
 
-    if (options?.auto_plant) this.plant();
     this.peer.register_remote_binding({ id: this.identifier, name: this.name });
 
     return this;
-  }
-
-  // subscribe
-  plant(
-    arg1?: TorrentCallBack | TorrentConsumeParams,
-    arg2?: TorrentCallBack | TorrentConsumeParams,
-  ) {
-    let callback: TorrentCallBack | undefined;
-    let params: TorrentConsumeParams | undefined;
-
-    if (typeof arg1 === "function") {
-      callback = arg1;
-      if (arg2 && typeof arg2 === "object") params = arg2;
-    } else if (arg1 && typeof arg1 === "object") {
-      params = arg1;
-      if (typeof arg2 === "function") callback = arg2;
-    }
-
-    if (!this.is_planted) this.is_planted = true;
-  }
-
-  // unsub
-  unplant() {
-    this.is_planted = false;
   }
 
   send(
@@ -89,7 +62,7 @@ export class TorrentSeeder {
 
     if (!this.peer) throw new Error("Seeder requires a peer to send");
     this.peer.publish({
-      message: { body },
+      message: new TorrentMessage(body || null, params),
       seeder: {
         id: this.identifier,
         name: this.name,
@@ -120,7 +93,7 @@ export class TorrentSeeder {
       if (typeof arg2 === "string") name = arg2;
     }
 
-    const furrow = new TorrentFurrow(name, options, this);
+    const furrow = new TorrentFurrow(name, options, this, this.peer);
     this.furrows.push(furrow);
     return furrow;
   }

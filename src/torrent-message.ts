@@ -1,5 +1,6 @@
 import { TorrentUtils } from "./torrent-utils";
 import {
+  TorrentAckCallBack,
   TorrentMessageBody,
   TorrentMessageParams,
   TorrentMessageProperties,
@@ -9,10 +10,13 @@ export class TorrentMessage {
   private utils: TorrentUtils = new TorrentUtils();
   private encoder: TextEncoder = new TextEncoder();
   properties: TorrentMessageProperties;
+  on_ack?: TorrentAckCallBack;
   body: TorrentMessageBody = null;
 
   constructor(message_body: TorrentMessageBody, params?: TorrentMessageParams) {
     this.body = message_body;
+
+    this.on_ack = params?.on_ack;
 
     this.properties = {
       message_id: this.utils.random_string(),

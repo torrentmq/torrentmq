@@ -29,7 +29,7 @@ export class TorrentPeer {
   readonly identifier: string;
 
   constructor(signaller?: TorrentSignaller) {
-    this.signaller = signaller ?? new TorrentSignaller({ auto_connect: true });
+    this.signaller = signaller ?? new TorrentSignaller();
     this.identifier =
       (this.signaller && this.signaller.identifier) ||
       this.utils.random_string();
@@ -42,6 +42,8 @@ export class TorrentPeer {
     // create a new PeerConnection and send an OFFER
     const { pc, dc } = this._create_peer_connection(this.identifier, true);
     this._emit("PEER_CONNECTED", { pc, dc });
+
+    await this.signaller.connect();
 
     // create an offer and send it
     const offer = await pc.createOffer();
@@ -71,6 +73,7 @@ export class TorrentPeer {
       furrow,
     };
 
+    this._emit("BIND", { seeder, furrow });
     this._broadcast_control(control);
   }
 
@@ -87,20 +90,27 @@ export class TorrentPeer {
       furrow,
     };
 
+    this._emit("UNBIND", { seeder, furrow });
     this._broadcast_control(control);
   }
 
   publish(msg: {
     seeder: TorrentControlSeederOrFurrow;
     furrow?: TorrentControlSeederOrFurrow;
-    message?: TorrentMessageObject;
+    message?: TorrentMessage;
   }) {
+    const publish_msg: TorrentMessageObject = {
+      body: msg.message?.body,
+      properties: msg.message?.properties,
+      on_ack: msg.message?.on_ack,
+    };
+
     const control: TorrentControlMessage = {
       type: "PUBLISH",
       peer_id: this.identifier,
       seeder: msg.seeder,
       furrow: msg?.furrow,
-      message: msg.message,
+      message: publish_msg,
     };
 
     // send to all connected peers via datachannels if available
@@ -323,6 +333,7 @@ export class TorrentPeer {
     const relay: TorrentSignalMessage = {
       type: "RELAY_CONTROL",
       from: this.identifier,
+      to: to_peer_id,
       control,
     };
     try {
@@ -346,6 +357,10 @@ export class TorrentPeer {
           this.remote_bindings.get(control.seeder.id) ?? new Set<string>();
         set.add(control.peer_id);
         this.remote_bindings.set(control.seeder.id, set);
+        this._emit("PEER_BIND", {
+          seeder: control.seeder,
+          furrow: control.furrow,
+        });
         break;
       }
       case "ANNOUNCE_UNBIND": {
@@ -354,10 +369,14 @@ export class TorrentPeer {
           set.delete(control.peer_id);
           if (set.size === 0) this.remote_bindings.delete(control.seeder.id);
         }
+        this._emit("PEER_UNBIND", {
+          seeder: control.seeder,
+          furrow: control.furrow,
+        });
         break;
       }
       case "PUBLISH": {
-        this._handle_publish(control);
+        this._handle_publish(control, true);
         break;
       }
       case "ACK": {
@@ -382,6 +401,7 @@ export class TorrentPeer {
   // TODO: fix _handle_publish to send to external peers
   private _handle_publish(
     msg: Extract<TorrentControlMessage, { type: "PUBLISH" }>,
+    is_receiving: boolean = false,
   ) {
     // handle routing locally: for each bound furrow/seeder owned by this peer run local callbacks
     // NOTE: The real routing logic will depend on how you map seeder_ids -> local handlers
@@ -390,13 +410,15 @@ export class TorrentPeer {
     // Example: if message has routing_key and matches this.identifier then accept
     const routing_key = msg.message?.properties?.routing_key ?? "";
 
+    if (!is_receiving) this._broadcast_control(msg);
+
     // naive local delivery: if routing_key is empty or equals our identifier then deliver
     if (!routing_key || routing_key === this.identifier) {
       const tmsg = new TorrentMessage(msg.message?.body ?? null);
       tmsg.properties = msg.message?.properties ?? {};
       // user of TorrentPeer should register callbacks to receive tmsg
       // e.g. an event emitter or overrideable method
-      this._emit("PUBLISH", msg);
+      this._emit(is_receiving ? "MESSAGE_RECEIVE" : "PUBLISH", msg);
     }
   }
 
@@ -450,8 +472,9 @@ export class TorrentPeer {
           }
         }
       }
-      this._broadcast_control(fnd_msg, from_peer_id);
     }
+
+    this._broadcast_control(fnd_msg, from_peer_id);
   }
 
   private _bind_seeder_or_furrow(
