@@ -8,6 +8,8 @@ import {
   TorrentSignalMessage,
   TorrentControlSeederOrFurrow,
   TorrentEventName,
+  TorrentBrokerBindings,
+  TorrentControlBindFurrow,
 } from "./torrent-types";
 import { TorrentUtils } from "./torrent-utils";
 
@@ -18,9 +20,8 @@ export class TorrentPeer {
   // map of remote peer id -> PeerEntry
   private peers: Map<string, TorrentPeerEntry> = new Map();
   // map [seeder_id, seeder_name] -> [furrow_id, furrow_name][]
-  private broker_bindings: Map<[string, string], Set<[string, string]>> =
-    new Map();
-  // all possible events
+  private broker_bindings: TorrentBrokerBindings = new Map();
+  // map emittable events to a set of function
   private _events: Map<TorrentEventName, Set<(data: any) => void>> = new Map();
 
   private signaller: TorrentSignaller;
@@ -45,7 +46,7 @@ export class TorrentPeer {
 
     await this.signaller.connect();
 
-    // create an offer and send it
+    // create an offer and send ikkt
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
@@ -62,7 +63,7 @@ export class TorrentPeer {
 
   register_remote_binding(
     seeder: TorrentControlSeederOrFurrow,
-    furrow?: TorrentControlSeederOrFurrow,
+    furrow?: TorrentControlBindFurrow,
   ) {
     this._bind_seeder_or_furrow(seeder, furrow);
 
@@ -79,9 +80,9 @@ export class TorrentPeer {
 
   unregister_remote_binding(
     seeder: TorrentControlSeederOrFurrow,
-    furrow?: TorrentControlSeederOrFurrow,
+    furrow?: TorrentControlBindFurrow,
   ) {
-    this._bind_seeder_or_furrow(seeder, furrow);
+    this._unbind_seeder_or_furrow(seeder, furrow);
 
     const control: TorrentControlMessage = {
       type: "ANNOUNCE_UNBIND",
@@ -479,7 +480,7 @@ export class TorrentPeer {
 
   private _bind_seeder_or_furrow(
     seeder: TorrentControlSeederOrFurrow,
-    furrow?: TorrentControlSeederOrFurrow,
+    furrow?: TorrentControlBindFurrow,
   ) {
     // Check if the seeder already has an entry in the map
     const seeder_key: [string, string] = [seeder.id, seeder.name];
@@ -493,9 +494,36 @@ export class TorrentPeer {
 
     // If a furrow is provided, add the furrow to the set for this seeder
     if (furrow?.id && furrow?.name) {
-      const furrowKey: [string, string] = [furrow.id, furrow.name];
+      const furrowKey: [string, string, string] = [
+        furrow.id,
+        furrow.name,
+        furrow.routing_key ?? this.identifier,
+      ];
       furrow_set.add(furrowKey);
     }
+  }
+
+  private _unbind_seeder_or_furrow(
+    seeder: TorrentControlSeederOrFurrow,
+    furrow?: TorrentControlBindFurrow,
+  ) {
+    // Check if the seeder already has an entry in the map
+    const seeder_key: [string, string] = [seeder.id, seeder.name];
+    let furrow_set = this.broker_bindings.get(seeder_key);
+
+    if (!furrow_set && furrow) return;
+    if (furrow?.id && furrow?.name) {
+      const furrowKey: [string, string, string] = [
+        furrow.id,
+        furrow.name,
+        furrow.routing_key ?? this.identifier,
+      ];
+      // Remove furrow
+      furrow_set?.delete(furrowKey);
+      return;
+    }
+    //Remove seeder
+    this.broker_bindings.delete(seeder_key);
   }
 
   private _emit(event: TorrentEventName, payload: any) {

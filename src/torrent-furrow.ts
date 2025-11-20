@@ -78,6 +78,7 @@ export class TorrentFurrow {
     }
 
     if (!this.is_planted) this.is_planted = true;
+    this.peer.on("MESSAGE_RECEIVE", callback);
   }
 
   unplant() {
@@ -110,6 +111,18 @@ export class TorrentFurrow {
       routing_key: routing_key ? routing_key : this.peer.identifier,
       is_bound: true,
     });
+
+    this.peer.register_remote_binding(
+      {
+        id: this.seeder.identifier,
+        name: this.seeder.name,
+      },
+      {
+        id: this.identifier,
+        name: this.name,
+        routing_key,
+      },
+    );
   }
 
   unbind() {

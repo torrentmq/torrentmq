@@ -79,15 +79,25 @@ export type TorrentControlSeederOrFurrow = {
   name: string;
 };
 
+export type TorrentControlBindFurrow = TorrentControlSeederOrFurrow & {
+  routing_key?: string;
+};
+
 type TorrentControlPeerInfo = {
   peer_id: string;
   seeder: TorrentControlSeederOrFurrow;
   furrow?: TorrentControlSeederOrFurrow;
 };
 
+type TorrentControlPeerBindInfo = {
+  peer_id: string;
+  seeder: TorrentControlSeederOrFurrow;
+  furrow?: TorrentControlBindFurrow;
+};
+
 export type TorrentControlMessage =
-  | (TorrentControlPeerInfo & { type: "ANNOUNCE_BIND" })
-  | (TorrentControlPeerInfo & { type: "ANNOUNCE_UNBIND" })
+  | (TorrentControlPeerBindInfo & { type: "ANNOUNCE_BIND" })
+  | (TorrentControlPeerBindInfo & { type: "ANNOUNCE_UNBIND" })
   | (TorrentControlPeerInfo & {
       type: "PUBLISH";
       message?: TorrentMessageObject;
@@ -115,7 +125,14 @@ export type TorrentSignalMessage =
 
 export type TorrentSignalHandler = (msg: TorrentSignalMessage) => void;
 
+// map [seeder_id, seeder_name] -> [furrow_id, furrow_name, routing_key][]
+export type TorrentBrokerBindings = Map<
+  [string, string],
+  Set<[string, string, string]>
+>;
+
 export type TorrentPeerEntry = {
   pc: RTCPeerConnection;
   dc?: RTCDataChannel;
+  bd?: TorrentBrokerBindings;
 };
