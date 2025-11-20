@@ -18,7 +18,6 @@ export class TorrentBroker {
       PEER_CONNECTED: () => (this.rtc_connected = true),
       PEER_DISCONNECTED: () => (this.rtc_connected = false),
     });
-    await this.rtc_client.connect_to_peer();
   }
 
   seeder(

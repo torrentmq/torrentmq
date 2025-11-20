@@ -78,7 +78,7 @@ export class TorrentFurrow {
     }
 
     if (!this.is_planted) this.is_planted = true;
-    this.peer.on("MESSAGE_RECEIVE", callback);
+    if (callback) this.peer.on("MESSAGE_RECEIVE", callback);
   }
 
   unplant() {

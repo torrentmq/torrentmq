@@ -109,19 +109,19 @@ export type TorrentControlMessage =
 
 // Signal message for WebRTC
 export type TorrentSignalMessage =
-  | {
-      type: "SIGNALLER";
-      identifier: string;
-    }
+  | { type: "HELO"; from: string }
+  | { type: "SIGNALLER"; identifier: string }
   | { type: "OFFER"; from: string; to?: string; sdp: RTCSessionDescriptionInit }
   | { type: "ANSWER"; from: string; to: string; sdp: RTCSessionDescriptionInit }
   | { type: "ICE"; from: string; to?: string; candidate: RTCIceCandidateInit }
-  | {
-      type: "RELAY_CONTROL";
-      from: string;
-      to?: string;
-      control: TorrentControlMessage;
-    };
+  | { type: "STATUS"; from: string; peers: Map<string, TorrentPeerEntry> };
+
+export type TorrentRTCMessage = {
+  type: "RELAY_CONTROL";
+  from: string;
+  to?: string;
+  control: TorrentControlMessage;
+};
 
 export type TorrentSignalHandler = (msg: TorrentSignalMessage) => void;
 
