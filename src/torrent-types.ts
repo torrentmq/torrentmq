@@ -22,7 +22,6 @@ export type TorrentConsumeParams = {
   tag?: string;
   no_ack?: boolean;
   exclusive?: boolean;
-  args?: Record<string, any>;
 };
 
 export type TorrentCallBack = (message: TorrentMessage) => void;
@@ -109,7 +108,8 @@ export type TorrentControlMessage =
 
 // Signal message for WebRTC
 export type TorrentSignalMessage =
-  | { type: "HELO"; from: string; to?: string }
+  | { type: "HELO"; from: string }
+  | { type: "HIHI"; from: string; to: string }
   | { type: "SIGNALLER"; identifier: string }
   | { type: "OFFER"; from: string; to?: string; sdp: RTCSessionDescriptionInit }
   | { type: "ANSWER"; from: string; to: string; sdp: RTCSessionDescriptionInit }
@@ -134,5 +134,8 @@ export type TorrentBrokerBindings = Map<
 export type TorrentPeerEntry = {
   pc: RTCPeerConnection;
   dc?: RTCDataChannel;
-  bd?: TorrentBrokerBindings;
+  bb?: TorrentBrokerBindings;
+  ice_queue?: RTCIceCandidateInit[];
+  making_offer?: boolean;
+  israp?: boolean; // is setting remote answer pending
 };
