@@ -104,7 +104,7 @@ export type TorrentControlMessage =
   | (TorrentControlPeerInfo & { type: "FIND" })
   | (TorrentControlPeerInfo & { type: "FOUND" })
   | (TorrentControlPeerInfo & { type: "NOT_FOUND" })
-  | { type: "ACK"; peer_id: string; message_id: string };
+  | (TorrentControlPeerInfo & { type: "ACK"; message_id: string });
 
 // Signal message for WebRTC
 export type TorrentSignalMessage =
@@ -138,4 +138,5 @@ export type TorrentPeerEntry = {
   ice_queue?: RTCIceCandidateInit[];
   making_offer?: boolean;
   israp?: boolean; // is setting remote answer pending
+  cost?: number;
 };

@@ -1,4 +1,4 @@
-import { TorrentError } from "./torrent-error";
+import { TorrentEmitter } from "./torrent-emitter";
 import { TorrentMessage } from "./torrent-message";
 import { TorrentSignaller } from "./torrent-signaller";
 import {
@@ -13,24 +13,22 @@ import {
 } from "./torrent-types";
 import { TorrentUtils } from "./torrent-utils";
 
-export class TorrentPeer {
+export class TorrentPeer extends TorrentEmitter<TorrentEventName> {
   // map of remote peer id -> TorrentPeerEntry { RTCPeerConnection, RTCDataChannel, TorrentBrokerBindings }
   private peers: Map<string, TorrentPeerEntry> = new Map();
   // map [seeder_id, seeder_name] -> [furrow_id, furrow_name, routing_key][]
   private broker_bindings: TorrentBrokerBindings = new Map();
-  // map emittable events to a set of function
-  private _events: Map<TorrentEventName, Set<(data: any) => void>> = new Map();
+  // the hosted seeders and or furrows [seeder_name] -> [furrow_name][]
+  private hosted: Map<[string], Set<[string]>> = new Map();
 
-  private signaller: TorrentSignaller;
+  private signaller: TorrentSignaller = new TorrentSignaller();
   private utils: TorrentUtils = new TorrentUtils();
 
-  readonly identifier: string;
+  readonly identifier: string = this.utils.random_string();
+  readonly is_connected: boolean = false;
 
-  constructor(signaller?: TorrentSignaller) {
-    this.signaller = signaller ?? new TorrentSignaller();
-    this.identifier =
-      (this.signaller && this.signaller.identifier) ||
-      this.utils.random_string();
+  constructor() {
+    super();
 
     // route incoming signalling messages into this instance
     this.signaller.on_message = (m) => this._handle_signal_message(m);
@@ -69,7 +67,7 @@ export class TorrentPeer {
       furrow,
     };
 
-    this._emit("BIND", { seeder, furrow });
+    this.emit("BIND", { seeder, furrow });
     this._broadcast_control(control);
   }
 
@@ -86,7 +84,7 @@ export class TorrentPeer {
       furrow,
     };
 
-    this._emit("UNBIND", { seeder, furrow });
+    this.emit("UNBIND", { seeder, furrow });
     this._broadcast_control(control);
   }
 
@@ -113,38 +111,14 @@ export class TorrentPeer {
     this._handle_publish(control);
   }
 
-  close_peer(remote_id: string) {
-    const entry = this.peers.get(remote_id);
+  close_peer_connection(peer_id: string) {
+    const entry = this.peers.get(peer_id);
     if (!entry) return;
     try {
       entry.pc.close();
     } catch (e) {}
-    this.peers.delete(remote_id);
-    this._emit("PEER_DISCONNECTED", { peer_id: remote_id });
-  }
-
-  on(
-    event:
-      | TorrentEventName
-      | Partial<Record<TorrentEventName, (payload: any) => void>>,
-    handler?: (payload: any) => void,
-  ) {
-    if (typeof event === "object") {
-      for (const [evt, fn] of Object.entries(event)) {
-        this.on(evt as TorrentEventName, fn);
-      }
-      return;
-    }
-
-    if (!handler) {
-      throw new TorrentError("Handler must be provided for on(event, handler)");
-    }
-
-    if (!this._events.has(event)) {
-      this._events.set(event, new Set());
-    }
-
-    this._events.get(event)!.add(handler);
+    this.peers.delete(peer_id);
+    this.emit("PEER_DISCONNECTED", { peer_id: peer_id });
   }
 
   find(
@@ -225,7 +199,7 @@ export class TorrentPeer {
         state === "failed" ||
         state === "closed"
       ) {
-        this._emit("PEER_DISCONNECTED", { peer_id: remote_id });
+        this.emit("PEER_DISCONNECTED", { peer_id: remote_id });
       }
     };
 
@@ -285,7 +259,7 @@ export class TorrentPeer {
       }
 
       // notify listeners
-      this._emit("PEER_CONNECTED", { peer_id: remote_id, dc });
+      this.emit("PEER_CONNECTED", { peer_id: remote_id, dc });
     };
 
     dc.onmessage = (ev) => {
@@ -302,7 +276,7 @@ export class TorrentPeer {
     };
 
     dc.onclose = () => {
-      this._emit("PEER_DISCONNECTED", { peer_id: remote_id });
+      this.emit("PEER_DISCONNECTED", { peer_id: remote_id });
       const entry = this.peers.get(remote_id);
       if (entry) entry.dc = undefined;
     };
@@ -528,6 +502,40 @@ export class TorrentPeer {
     }
   }
 
+  private _handle_helo(msg: TorrentSignalMessage) {
+    // HELO auto-discovery: when a peer broadcasts HELO we start initiating a connection to them
+    if (msg.type === "HELO" && msg.from) {
+      const from = msg.from as string;
+      if (from === this.identifier) return;
+      // if we already have a connection to them, ignore
+      if (this.peers.has(from)) return;
+      // they might not have discovered this peer so say "HIHI"
+      if (msg.from !== this.identifier) {
+        const hello_broadcast: TorrentSignalMessage = {
+          type: "HIHI",
+          from: this.identifier,
+          to: msg.from,
+        };
+        this.signaller.send(hello_broadcast);
+      }
+
+      // create pc + dc and send OFFER (deterministic tie-break inside)
+      this._initiate_connection_to_peer(from).catch((e) =>
+        console.warn("failed to initiate connection", e),
+      );
+      return;
+    }
+  }
+
+  private _handle_hihi(msg: TorrentSignalMessage) {
+    if (msg.type !== "HIHI") return;
+    const from = msg.from;
+    if (from === this.identifier) return;
+    if (msg.to !== this.identifier) return;
+    // initiate connection to the peer that sent HELO_ACK
+    this._initiate_connection_to_peer(from);
+  }
+
   // Move all control traffic to DCs only. WebSocket signaling is used only for HELO/OFFER/ANSWER/ICE.
   private _broadcast_control(
     control: TorrentControlMessage,
@@ -591,7 +599,7 @@ export class TorrentPeer {
           furrow_set.add(furrowKey);
         }
 
-        this._emit("PEER_BIND", {
+        this.emit("PEER_BIND", {
           seeder: control.seeder,
           furrow: control.furrow,
           peer_id: from_peer_id,
@@ -622,7 +630,7 @@ export class TorrentPeer {
           peer.bb.delete(seeder_key);
         }
 
-        this._emit("PEER_UNBIND", {
+        this.emit("PEER_UNBIND", {
           seeder: control.seeder,
           furrow: control.furrow,
           peer_id: from_peer_id,
@@ -637,7 +645,7 @@ export class TorrentPeer {
 
       case "ACK": {
         // TODO: ack handling (deliver to on_ack callbacks)
-        this._emit("ACK", {
+        this.emit("ACK", {
           message_id: control.message_id,
           peer_id: from_peer_id,
         });
@@ -650,7 +658,7 @@ export class TorrentPeer {
       }
 
       case "FOUND": {
-        this._emit("FOUND", {
+        this.emit("FOUND", {
           seeder: control.seeder,
           furrow: control?.furrow,
           peer_id: from_peer_id,
@@ -661,7 +669,7 @@ export class TorrentPeer {
       }
 
       case "NOT_FOUND": {
-        this._emit("NOT_FOUND", { seeder: control.seeder });
+        this.emit("NOT_FOUND", { seeder: control.seeder });
         break;
       }
     }
@@ -675,7 +683,7 @@ export class TorrentPeer {
     // But to avoid loops, PUBLISH arriving over DC should be handled by _handle_receive (not this function).
     // When called for a local origin, broadcast to peers (DCs only)
     this._broadcast_control(msg);
-    this._emit("PUBLISH", msg);
+    this.emit("PUBLISH", msg);
   }
 
   private _handle_receive(
@@ -688,7 +696,7 @@ export class TorrentPeer {
       const tmsg = new TorrentMessage(msg.message?.body ?? null);
       tmsg.properties = msg.message?.properties ?? {};
       // let user handle it
-      this._emit("MESSAGE_RECEIVE", msg);
+      this.emit("MESSAGE_RECEIVE", msg);
     }
 
     // Additionally, match against local broker_bindings (furrow-level routing)
@@ -714,41 +722,7 @@ export class TorrentPeer {
       }
     }
 
-    if (msg?.furrow && furrow) this._emit("MESSAGE_RECEIVE", msg);
-  }
-
-  private _handle_helo(msg: TorrentSignalMessage) {
-    // HELO auto-discovery: when a peer broadcasts HELO we start initiating a connection to them
-    if (msg.type === "HELO" && msg.from) {
-      const from = msg.from as string;
-      if (from === this.identifier) return;
-      // if we already have a connection to them, ignore
-      if (this.peers.has(from)) return;
-      // they might not have discovered this peer so say "HIHI"
-      if (msg.from !== this.identifier) {
-        const hello_broadcast: TorrentSignalMessage = {
-          type: "HIHI",
-          from: this.identifier,
-          to: msg.from,
-        };
-        this.signaller.send(hello_broadcast);
-      }
-
-      // create pc + dc and send OFFER (deterministic tie-break inside)
-      this._initiate_connection_to_peer(from).catch((e) =>
-        console.warn("failed to initiate connection", e),
-      );
-      return;
-    }
-  }
-
-  private _handle_hihi(msg: TorrentSignalMessage) {
-    if (msg.type !== "HIHI") return;
-    const from = msg.from;
-    if (from === this.identifier) return;
-    if (msg.to !== this.identifier) return;
-    // initiate connection to the peer that sent HELO_ACK
-    this._initiate_connection_to_peer(from);
+    if (msg?.furrow && furrow) this.emit("MESSAGE_RECEIVE", msg);
   }
 
   private _search_seeder_or_furrow(
@@ -837,15 +811,83 @@ export class TorrentPeer {
     this.broker_bindings.delete(seeder_key);
   }
 
-  private _emit(event: TorrentEventName, payload: any) {
-    const handlers = this._events.get(event);
-    if (!handlers) return;
-    for (const h of handlers) {
-      try {
-        h(payload);
-      } catch (err) {
-        console.warn("Error in event handler for", event, err);
+  // TODO: A star algorithm for advanced routing
+  // get the stats for the peer connections
+  // choose the best peer based on latency, bandwidth, etc.
+  private async _calculate_best_route(
+    control: TorrentControlMessage,
+  ): Promise<{ peer_id: string; cost: number }[]> {
+    // calculate the best peer(s) for routing based on connection stats and binding availability
+    const candidates: Array<{ peer_id: string; cost: number }> = [];
+    const { seeder, furrow } = control;
+
+    // gather costs for each peer based on ICE stats
+    for (const [, entry] of this.peers) {
+      const pc = entry?.pc;
+      const stats = await pc?.getStats?.();
+      let minCost: number | undefined;
+
+      if (stats) {
+        stats.forEach((report) => {
+          if (
+            report.type === "candidate-pair" &&
+            report.state === "succeeded"
+          ) {
+            // Defensive: avoid division by zero
+            const packetsReceived = report.packetsReceived || 1;
+            const cost =
+              0.7 * (report.currentRoundTripTime ?? 0) +
+              0.3 * ((report.totalRoundTripTime ?? 0) / packetsReceived);
+
+            if (minCost === undefined || cost < minCost) {
+              minCost = cost;
+            }
+          }
+        });
+      }
+      if (minCost !== undefined) {
+        entry.cost = minCost;
+      } else {
+        delete entry.cost;
       }
     }
+
+    // filter peers that have the desired seeder/furrow and a cost
+    const seen = new Set<string>();
+    for (const [peer_id, entry] of this.peers) {
+      if (entry.cost === undefined) continue;
+      if (!entry.bb) continue;
+
+      let matched = false;
+      for (const [seeder_entry, furrow_set] of entry.bb) {
+        const [, real_seeder_name] = seeder_entry;
+        if (real_seeder_name !== seeder.name) continue;
+
+        if (furrow) {
+          const req_furrow_name = furrow.name;
+          for (const [, real_furrow_name] of furrow_set) {
+            if (real_furrow_name === req_furrow_name) {
+              matched = true;
+              break;
+            }
+          }
+        } else {
+          matched = true;
+        }
+        if (matched) break;
+      }
+      if (matched && !seen.has(peer_id)) {
+        candidates.push({ peer_id, cost: entry.cost });
+        seen.add(peer_id);
+      }
+    }
+
+    // Sort by cost (ascending)
+    candidates.sort((a, b) => a.cost - b.cost);
+    return candidates;
   }
+
+  // TODO: implement load balancing for sharing seeders
+  // multiple peers hosting the same seeder but only part of it e.g. one furrow
+  private async _load_balance_control() {}
 }
