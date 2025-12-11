@@ -1,0 +1,3 @@
+- [ ] ACK message reponse if set.
+- [ ] Load balancing seeders and furrows.
+- [ ] Improve message routing algorithm.

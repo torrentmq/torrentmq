@@ -1,4 +1,5 @@
 import { TorrentEmitter } from "./torrent-emitter";
+import { TorrentLRUCache } from "./torrent-lru";
 import { TorrentMessage } from "./torrent-message";
 import { TorrentSignaller } from "./torrent-signaller";
 import {
@@ -20,6 +21,8 @@ export class TorrentPeer extends TorrentEmitter<TorrentEventName> {
   private broker_bindings: TorrentBrokerBindings = new Map();
   // the hosted seeders and or furrows [seeder_name] -> [furrow_name][]
   private hosted: Map<[string], Set<[string]>> = new Map();
+
+  private forwarded_cache = new TorrentLRUCache<string, boolean>(1024);
 
   private signaller: TorrentSignaller = new TorrentSignaller();
   private utils: TorrentUtils = new TorrentUtils();
@@ -62,6 +65,7 @@ export class TorrentPeer extends TorrentEmitter<TorrentEventName> {
 
     const control: TorrentControlMessage = {
       type: "ANNOUNCE_BIND",
+      control_id: this.utils.random_string(),
       peer_id: this.identifier,
       seeder,
       furrow,
@@ -79,6 +83,7 @@ export class TorrentPeer extends TorrentEmitter<TorrentEventName> {
 
     const control: TorrentControlMessage = {
       type: "ANNOUNCE_UNBIND",
+      control_id: this.utils.random_string(),
       peer_id: this.identifier,
       seeder,
       furrow,
@@ -101,6 +106,7 @@ export class TorrentPeer extends TorrentEmitter<TorrentEventName> {
 
     const control: TorrentControlMessage = {
       type: "PUBLISH",
+      control_id: this.utils.random_string(),
       peer_id: this.identifier,
       seeder: msg.seeder,
       furrow: msg?.furrow,
@@ -127,6 +133,7 @@ export class TorrentPeer extends TorrentEmitter<TorrentEventName> {
   ) {
     const control: TorrentControlMessage = {
       type: "FIND",
+      control_id: this.utils.random_string(),
       peer_id: this.identifier,
       seeder,
       furrow,
@@ -226,6 +233,7 @@ export class TorrentPeer extends TorrentEmitter<TorrentEventName> {
 
         const announce: TorrentControlMessage = {
           type: "ANNOUNCE_BIND",
+          control_id: this.utils.random_string(),
           peer_id: this.identifier,
           seeder: { id: seeder_id, name: seeder_name },
         };
@@ -554,16 +562,20 @@ export class TorrentPeer extends TorrentEmitter<TorrentEventName> {
       return;
     }
 
-    // otherwise broadcast to all connected peers over DCs only
-    for (const [, entry] of this.peers) {
-      if (entry.dc && entry.dc.readyState === "open") {
-        try {
-          entry.dc.send(JSON.stringify(control));
-        } catch (e) {
-          console.warn("failed to broadcast control to peer", e);
+    if (control.type !== "PUBLISH")
+      // otherwise broadcast to all connected peers over DCs only
+      for (const [, entry] of this.peers) {
+        if (entry.dc && entry.dc.readyState === "open") {
+          try {
+            entry.dc.send(JSON.stringify(control));
+          } catch (e) {
+            console.warn("failed to broadcast control to peer", e);
+          }
         }
       }
-    }
+    else
+      // use the weighted k-best forwarding alg
+      this._forward_msg(control).then();
   }
 
   private _handle_control_message(
@@ -689,40 +701,66 @@ export class TorrentPeer extends TorrentEmitter<TorrentEventName> {
   private _handle_receive(
     msg: Extract<TorrentControlMessage, { type: "PUBLISH" }>,
   ) {
+    // ignore if message from self
+    if (msg.peer_id === this.identifier) return;
+
+    // already processed, skip entirely
+    if (this.forwarded_cache.has(msg.control_id)) return;
+    this.forwarded_cache.set(msg.control_id, true);
+
+    this._forward_msg(msg).then();
+
     // Local routing: accept message if routing_key matches this.identifier or empty
     const routing_key = msg.message?.properties?.routing_key ?? "";
 
     if (!routing_key || routing_key === this.identifier) {
       const tmsg = new TorrentMessage(msg.message?.body ?? null);
       tmsg.properties = msg.message?.properties ?? {};
-      // let user handle it
       this.emit("MESSAGE_RECEIVE", msg);
     }
 
     // Additionally, match against local broker_bindings (furrow-level routing)
-    let furrow;
+    // broker bindings routing (furrow-level)
     for (const [seeder_entry, furrow_set] of this.broker_bindings) {
-      const [, real_seeder_name] = seeder_entry;
-      if (real_seeder_name !== msg.seeder.name) continue;
+      const [seeder_id] = seeder_entry;
 
-      if (msg?.furrow) {
-        const req_furrow_name = msg.furrow.name;
-        for (const [
-          real_furrow_id,
-          real_furrow_name,
-          furrow_routing_key,
-        ] of furrow_set) {
-          if (
-            real_furrow_name === req_furrow_name &&
-            routing_key === furrow_routing_key
-          ) {
-            furrow = { id: real_furrow_id, name: real_furrow_name };
+      // match seeder?
+      if (msg.seeder.id !== seeder_id) continue;
+
+      // if no furrow specified in control: deliver to all local furrows
+      if (!msg.furrow) {
+        for (const [furrow_id, furrow_name, furrow_rkey] of furrow_set) {
+          if (!furrow_rkey || furrow_rkey === routing_key) {
+            const tmsg = new TorrentMessage(msg.message?.body ?? null);
+            tmsg.properties = msg.message?.properties ?? {};
+            this.emit("MESSAGE_RECEIVE", {
+              ...msg,
+              furrow: {
+                id: furrow_id,
+                name: furrow_name,
+                routing_key: furrow_rkey,
+              },
+            });
           }
+        }
+        continue;
+      }
+
+      // if the PUBLISH specifies a furrow, match routing
+      const { id: f_id } = msg.furrow;
+
+      for (const [local_f_id, , local_rkey] of furrow_set) {
+        // must match furrow id
+        if (local_f_id !== f_id) continue;
+
+        // routing_key must be empty or match
+        if (!local_rkey || !routing_key || local_rkey === routing_key) {
+          const tmsg = new TorrentMessage(msg.message?.body ?? null);
+          tmsg.properties = msg.message?.properties ?? {};
+          this.emit("MESSAGE_RECEIVE", msg);
         }
       }
     }
-
-    if (msg?.furrow && furrow) this.emit("MESSAGE_RECEIVE", msg);
   }
 
   private _search_seeder_or_furrow(
@@ -733,6 +771,7 @@ export class TorrentPeer extends TorrentEmitter<TorrentEventName> {
 
     const fnd_msg: TorrentControlMessage = {
       type: "FOUND",
+      control_id: this.utils.random_string(),
       peer_id: this.identifier,
       seeder: undefined as any, // fill in later
     };
@@ -811,21 +850,95 @@ export class TorrentPeer extends TorrentEmitter<TorrentEventName> {
     this.broker_bindings.delete(seeder_key);
   }
 
-  // TODO: A star algorithm for advanced routing
+  private async _forward_msg(
+    control: Extract<TorrentControlMessage, { type: "PUBLISH" }>,
+  ) {
+    const id = control.control_id;
+    if (!id) return;
+    if (this.forwarded_cache.has(id)) return;
+    this.forwarded_cache.set(id, true);
+
+    this._calculate_candidates(control).then(
+      (res: { best: { peer_id: string; cost: number }[]; rest: string[] }) => {
+        if (res.best.length <= 0 && res.rest.length <= 0) return;
+        for (const { peer_id } of res.best) {
+          const entry = this.peers.get(peer_id);
+          if (!entry?.dc) continue;
+          if (entry.dc && entry.dc.readyState === "open") {
+            const new_control: TorrentControlMessage = {
+              ...control,
+              message: {
+                ...control.message,
+                properties: {
+                  ...control.message?.properties,
+                  headers: {
+                    ...control.message?.properties?.headers,
+                    hop_count:
+                      (control.message?.properties?.headers?.hop_count ?? 0) +
+                      1,
+                  },
+                },
+              },
+              remaining_targets: res.rest,
+            };
+
+            try {
+              entry.dc.send(JSON.stringify(new_control));
+            } catch (e) {
+              console.warn("failed to broadcast control to peer", e);
+            }
+          }
+        }
+      },
+    );
+  }
+
+  private _split_candidates(
+    candidates: { peer_id: string; cost: number }[],
+    k: number,
+  ) {
+    const best = candidates.slice(0, k);
+    const rest = candidates.slice(k);
+    return { best, rest: rest.map((x) => x.peer_id) };
+  }
+
+  // TODO: A* algorithm for advanced routing
   // get the stats for the peer connections
   // choose the best peer based on latency, bandwidth, etc.
-  private async _calculate_best_route(
-    control: TorrentControlMessage,
-  ): Promise<{ peer_id: string; cost: number }[]> {
-    // calculate the best peer(s) for routing based on connection stats and binding availability
+  // It seems that A* makes no sense for this.
+  // Will be pivoting to Weighted K-Best Forwarding (W-KBF)
+  private async _calculate_candidates(
+    control: Extract<TorrentControlMessage, { type: "PUBLISH" }>,
+  ): Promise<{
+    best: { peer_id: string; cost: number }[];
+    rest: string[];
+  }> {
+    const seen = new Set<string>();
     const candidates: Array<{ peer_id: string; cost: number }> = [];
-    const { seeder, furrow } = control;
+    const { seeder, furrow, peer_id: control_peer_id } = control;
+    const targets = control.remaining_targets;
+    let peers = this.peers;
 
-    // gather costs for each peer based on ICE stats
-    for (const [, entry] of this.peers) {
+    if (targets && targets?.length > 0) {
+      // Create a filtered array of [key, peer] pairs
+      const filtered_entries = targets
+        .map((key) => {
+          const peer = this.peers.get(key);
+          return peer ? [key, peer] : null; // If peer exists, return [key, peer], otherwise return null
+        })
+        .filter((entry) => entry !== null) as [string, TorrentPeerEntry][]; // Rebuild the Map from the filtered entries
+
+      peers = new Map(filtered_entries);
+    }
+
+    for (const [peer_id, entry] of peers) {
+      // Skip if the peer_id is the same as the control peer_id (the sender)
+      if (peer_id === control_peer_id) continue;
+      if (peer_id === this.identifier) continue;
+
       const pc = entry?.pc;
       const stats = await pc?.getStats?.();
-      let minCost: number | undefined;
+      let min_cost = Infinity;
 
       if (stats) {
         stats.forEach((report) => {
@@ -838,53 +951,43 @@ export class TorrentPeer extends TorrentEmitter<TorrentEventName> {
             const cost =
               0.7 * (report.currentRoundTripTime ?? 0) +
               0.3 * ((report.totalRoundTripTime ?? 0) / packetsReceived);
-
-            if (minCost === undefined || cost < minCost) {
-              minCost = cost;
-            }
+            min_cost = Math.min(min_cost, cost);
           }
         });
+        entry.cost = min_cost !== Infinity ? min_cost : entry.cost;
       }
-      if (minCost !== undefined) {
-        entry.cost = minCost;
-      } else {
-        delete entry.cost;
-      }
-    }
 
-    // filter peers that have the desired seeder/furrow and a cost
-    const seen = new Set<string>();
-    for (const [peer_id, entry] of this.peers) {
-      if (entry.cost === undefined) continue;
-      if (!entry.bb) continue;
+      if (entry.bb) {
+        let matched = false;
+        for (const [seeder_entry, furrow_set] of entry.bb) {
+          const [, real_seeder_name] = seeder_entry;
+          if (real_seeder_name !== seeder.name) continue;
 
-      let matched = false;
-      for (const [seeder_entry, furrow_set] of entry.bb) {
-        const [, real_seeder_name] = seeder_entry;
-        if (real_seeder_name !== seeder.name) continue;
-
-        if (furrow) {
-          const req_furrow_name = furrow.name;
-          for (const [, real_furrow_name] of furrow_set) {
-            if (real_furrow_name === req_furrow_name) {
-              matched = true;
-              break;
+          if (furrow) {
+            const req_furrow_name = furrow.name;
+            for (const [, real_furrow_name] of furrow_set) {
+              if (real_furrow_name === req_furrow_name) {
+                matched = true;
+                break;
+              }
             }
+          } else {
+            matched = true;
           }
-        } else {
-          matched = true;
+          if (matched) break;
         }
-        if (matched) break;
-      }
-      if (matched && !seen.has(peer_id)) {
-        candidates.push({ peer_id, cost: entry.cost });
-        seen.add(peer_id);
+        if (matched && !seen.has(peer_id)) {
+          candidates.push({ peer_id, cost: entry.cost ?? Infinity });
+          seen.add(peer_id);
+        }
       }
     }
 
-    // Sort by cost (ascending)
+    const k_max = Math.ceil(Math.sqrt(candidates.length));
+    const k = Math.min(k_max, candidates.length);
+
     candidates.sort((a, b) => a.cost - b.cost);
-    return candidates;
+    return this._split_candidates(candidates, k);
   }
 
   // TODO: implement load balancing for sharing seeders

@@ -83,12 +83,14 @@ export type TorrentControlBindFurrow = TorrentControlSeederOrFurrow & {
 };
 
 type TorrentControlPeerInfo = {
+  control_id: string;
   peer_id: string;
   seeder: TorrentControlSeederOrFurrow;
   furrow?: TorrentControlSeederOrFurrow;
 };
 
 type TorrentControlPeerBindInfo = {
+  control_id: string;
   peer_id: string;
   seeder: TorrentControlSeederOrFurrow;
   furrow?: TorrentControlBindFurrow;
@@ -100,6 +102,7 @@ export type TorrentControlMessage =
   | (TorrentControlPeerInfo & {
       type: "PUBLISH";
       message?: TorrentMessageObject;
+      remaining_targets?: string[];
     })
   | (TorrentControlPeerInfo & { type: "FIND" })
   | (TorrentControlPeerInfo & { type: "FOUND" })
