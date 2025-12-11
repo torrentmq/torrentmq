@@ -102,7 +102,6 @@ export type TorrentControlMessage =
   | (TorrentControlPeerInfo & {
       type: "PUBLISH";
       message?: TorrentMessageObject;
-      remaining_targets?: string[];
     })
   | (TorrentControlPeerInfo & { type: "FIND" })
   | (TorrentControlPeerInfo & { type: "FOUND" })
@@ -117,7 +116,12 @@ export type TorrentSignalMessage =
   | { type: "OFFER"; from: string; to?: string; sdp: RTCSessionDescriptionInit }
   | { type: "ANSWER"; from: string; to: string; sdp: RTCSessionDescriptionInit }
   | { type: "ICE"; from: string; to?: string; candidate: RTCIceCandidateInit }
-  | { type: "STATUS"; from: string; peers: Map<string, TorrentPeerEntry> };
+  | {
+      type: "STATUS";
+      from: string;
+      to?: string;
+      peers: string[];
+    };
 
 export type TorrentRTCMessage = {
   type: "RELAY_CONTROL";
@@ -134,6 +138,14 @@ export type TorrentBrokerBindings = Map<
   Set<[string, string, string]>
 >;
 
+export type TorrentPeerQuality =
+  | "EXCELLENT"
+  | "GOOD"
+  | "FAIR"
+  | "POOR"
+  | "BAD"
+  | "DEAD";
+
 export type TorrentPeerEntry = {
   pc: RTCPeerConnection;
   dc?: RTCDataChannel;
@@ -141,5 +153,13 @@ export type TorrentPeerEntry = {
   ice_queue?: RTCIceCandidateInit[];
   making_offer?: boolean;
   israp?: boolean; // is setting remote answer pending
-  cost?: number;
+  stats?: {
+    cost?: number;
+    rtt?: number; // round trip time
+    plr?: number; // packet loss ratio
+    jitter?: number;
+    aob?: number; // available outgoing bitrate
+    distance?: number;
+    quality?: TorrentPeerQuality;
+  };
 };
