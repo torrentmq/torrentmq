@@ -14,10 +14,9 @@ import { TorrentUtils } from "./torrent-utils";
 export class TorrentDHTNode extends TorrentEmitter<
   TorrentEventName | "CONTROL_MESSAGE" | "STATUS_UPDATE"
 > {
-  protected data_store: TorrentLRUCache<string, TorrentControlMessage> =
-    new TorrentLRUCache<string, TorrentControlMessage>(1024);
+  protected data_store: TorrentLRUCache<string, TorrentControlMessage>;
   // map of remote peer id -> TorrentPeerEntry { RTCPeerConnection, RTCDataChannel, TorrentBrokerBindings }
-  protected known_peers: Map<string, TorrentPeerEntry> = new Map();
+  protected connected_peers: Map<string, TorrentPeerEntry> = new Map();
   // map [seeder_id, seeder_name] -> [furrow_id, furrow_name, routing_key][]
   protected broker_bindings: TorrentBrokerBindings = new Map();
 
@@ -38,8 +37,13 @@ export class TorrentDHTNode extends TorrentEmitter<
     max_peers?: number;
     status_frequency?: number;
     partion_heal_interval?: number;
+    lru_size?: number;
   }) {
     super();
+
+    this.data_store = new TorrentLRUCache<string, TorrentControlMessage>(
+      options?.lru_size ?? 1024,
+    );
 
     if (options) {
       if (options?.min_peers) this.min_peers = options.min_peers;
@@ -75,14 +79,14 @@ export class TorrentDHTNode extends TorrentEmitter<
       });
 
     setInterval(() => {
-      if (this.known_peers.size < this.min_peers) {
+      if (this.connected_peers.size < this.min_peers) {
         // request HELO from signaller or reconnect to random known peer
         this.signaller.send({ type: "HELO", from: this.identifier });
       }
     }, this.partition_heal_interval);
 
     setInterval(() => {
-      this.known_peers.forEach((p) =>
+      this.connected_peers.forEach((p) =>
         this._get_connection_cost(p.pc).then(
           (res) =>
             (p.stats = {
@@ -97,7 +101,7 @@ export class TorrentDHTNode extends TorrentEmitter<
         ),
       );
 
-      const peer_metrics = Array.from(this.known_peers.values());
+      const peer_metrics = Array.from(this.connected_peers.values());
 
       const avg_rtt =
         peer_metrics.reduce((a, b) => a + (b?.stats?.rtt ?? 0), 0) /
@@ -106,15 +110,15 @@ export class TorrentDHTNode extends TorrentEmitter<
         peer_metrics.reduce((a, b) => a + (b?.stats?.plr ?? 0), 0) /
           peer_metrics.length || 0;
 
-      if (this.known_peers.size > 0) {
+      if (this.connected_peers.size > 0) {
         const status_broadcast: TorrentSignalMessage = {
           type: "STATUS",
           from: this.identifier,
           stats: {
             rtt: avg_rtt,
             plr: avg_plr,
-            accepting_connections: this.known_peers.size < this.max_peers,
-            connected_peers: [...this.known_peers.keys()],
+            accepting_connections: this.connected_peers.size < this.max_peers,
+            connected_peers: [...this.connected_peers.keys()],
           },
         };
 
@@ -134,7 +138,7 @@ export class TorrentDHTNode extends TorrentEmitter<
   }
 
   replicate_data(data: TorrentControlMessage) {
-    this.known_peers.forEach((peer) => {
+    this.connected_peers.forEach((peer) => {
       if (peer.dc && peer.dc.readyState === "open")
         peer.dc.send(JSON.stringify(data));
     });
@@ -149,12 +153,12 @@ export class TorrentDHTNode extends TorrentEmitter<
   }
 
   close_peer_connection(peer_id: string) {
-    const entry = this.known_peers.get(peer_id);
+    const entry = this.connected_peers.get(peer_id);
     if (!entry) return;
     try {
       entry.pc.close();
     } catch (e) {}
-    this.known_peers.delete(peer_id);
+    this.connected_peers.delete(peer_id);
     this.emit("PEER_DISCONNECTED", { peer_id: peer_id });
   }
 
@@ -163,7 +167,7 @@ export class TorrentDHTNode extends TorrentEmitter<
     create_dc = false,
   ): TorrentPeerEntry {
     // if existing peer connection exists, return it
-    const existing = this.known_peers.get(remote_id);
+    const existing = this.connected_peers.get(remote_id);
     if (existing) return existing;
 
     const pc = new RTCPeerConnection();
@@ -181,15 +185,15 @@ export class TorrentDHTNode extends TorrentEmitter<
       this._attach_dc_handlers(channel, remote_id);
 
       // store dc
-      const e = this.known_peers.get(remote_id);
+      const e = this.connected_peers.get(remote_id);
       if (e) e.dc = channel;
       else {
         // ensure iceQueue and flags exist even if we hadn't created the entry
-        this.known_peers.set(remote_id, {
+        this.connected_peers.set(remote_id, {
           pc,
           dc: channel,
         });
-        const created = this.known_peers.get(remote_id)!;
+        const created = this.connected_peers.get(remote_id)!;
         created.ice_queue = created.ice_queue ?? [];
         created.making_offer = created.making_offer ?? false;
         created.israp = created.israp ?? false;
@@ -222,7 +226,7 @@ export class TorrentDHTNode extends TorrentEmitter<
         state === "failed" ||
         state === "closed"
       ) {
-        this.known_peers.delete(remote_id);
+        this.connected_peers.delete(remote_id);
         this.emit("PEER_DISCONNECTED", { peer_id: remote_id });
       }
     };
@@ -234,14 +238,14 @@ export class TorrentDHTNode extends TorrentEmitter<
     entry.making_offer = false;
     entry.israp = false;
 
-    this.known_peers.set(remote_id, entry);
+    this.connected_peers.set(remote_id, entry);
     return entry;
   }
 
   private _attach_dc_handlers(dc: RTCDataChannel, remote_id: string) {
     dc.onopen = () => {
       // store dc on the peer entry (defensive)
-      const entry = this.known_peers.get(remote_id);
+      const entry = this.connected_peers.get(remote_id);
       if (entry) entry.dc = dc;
 
       // announce binds for currently bound seeders when channel opens
@@ -301,7 +305,7 @@ export class TorrentDHTNode extends TorrentEmitter<
     };
 
     dc.onclose = () => {
-      this.known_peers.delete(remote_id);
+      this.connected_peers.delete(remote_id);
       this.emit("PEER_DISCONNECTED", { peer_id: remote_id });
     };
   }
@@ -387,7 +391,7 @@ export class TorrentDHTNode extends TorrentEmitter<
     if (msg.to && msg.to !== this.identifier) return;
 
     // ensure entry exists (we are the non-offerer or we didn't initiate connection)
-    let entry = this.known_peers.get(remote_id);
+    let entry = this.connected_peers.get(remote_id);
 
     if (!entry) {
       entry = this._create_peer_connection(remote_id, false);
@@ -454,7 +458,7 @@ export class TorrentDHTNode extends TorrentEmitter<
     msg: Extract<TorrentSignalMessage, { type: "ANSWER" }>,
   ) {
     const remote_id = msg.from;
-    const entry = this.known_peers.get(remote_id);
+    const entry = this.connected_peers.get(remote_id);
 
     if (!entry) return;
 
@@ -508,7 +512,7 @@ export class TorrentDHTNode extends TorrentEmitter<
     msg: Extract<TorrentSignalMessage, { type: "ICE" }>,
   ) {
     const remote_id = msg.from;
-    const entry = this.known_peers.get(remote_id);
+    const entry = this.connected_peers.get(remote_id);
     if (!entry) return;
 
     try {
@@ -540,9 +544,9 @@ export class TorrentDHTNode extends TorrentEmitter<
     // if we already have a connection to them, ignore
     if (from === this.identifier) return;
     // they might not have discovered this peer so say "HIHI"
-    if (this.known_peers.has(from)) return;
+    if (this.connected_peers.has(from)) return;
     // dont add new peers when at max
-    if (this.known_peers.size >= this.max_peers) {
+    if (this.connected_peers.size >= this.max_peers) {
       const worst_peer = this._get_worst_peer();
       if (worst_peer) this.close_peer_connection(worst_peer);
       return;
@@ -664,7 +668,7 @@ export class TorrentDHTNode extends TorrentEmitter<
     let worst_id: string | null = null;
     let worst_distance = -Infinity;
 
-    this.known_peers.forEach((peer, peer_id) => {
+    this.connected_peers.forEach((peer, peer_id) => {
       const distance = peer.stats?.distance ?? Infinity;
       if (distance > worst_distance) {
         worst_distance = distance;

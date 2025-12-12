@@ -105,7 +105,7 @@ export class TorrentPeer extends TorrentDHTNode {
   ) {
     // if a target peer_id is given, send only to that peer (if open)
     if (to_peer_id) {
-      const targeted = this.known_peers.get(to_peer_id);
+      const targeted = this.connected_peers.get(to_peer_id);
       if (targeted?.dc && targeted.dc.readyState === "open") {
         try {
           targeted.dc.send(JSON.stringify(control));
@@ -118,7 +118,7 @@ export class TorrentPeer extends TorrentDHTNode {
 
     if (control.type !== "PUBLISH")
       // otherwise broadcast to all connected peers over DCs only
-      for (const [, entry] of this.known_peers) {
+      for (const [, entry] of this.connected_peers) {
         if (entry.dc && entry.dc.readyState === "open") {
           try {
             entry.dc.send(JSON.stringify(control));
@@ -137,7 +137,7 @@ export class TorrentPeer extends TorrentDHTNode {
     from_peer_id?: string,
   ) {
     // ensure peer entry has bb map
-    const peer = this.known_peers.get(from_peer_id ?? control.peer_id);
+    const peer = this.connected_peers.get(from_peer_id ?? control.peer_id);
     if (peer && !peer.bb) peer.bb = new Map();
 
     switch (control.type) {
@@ -415,7 +415,7 @@ export class TorrentPeer extends TorrentDHTNode {
     this._calculate_candidates(control).then(
       (res: { peer_id: string; ema: number }[]) => {
         for (const { peer_id } of res) {
-          const entry = this.known_peers.get(peer_id);
+          const entry = this.connected_peers.get(peer_id);
           if (!entry?.dc) continue;
           if (entry.dc && entry.dc.readyState === "open") {
             const new_control: TorrentControlMessage = {
@@ -465,7 +465,7 @@ export class TorrentPeer extends TorrentDHTNode {
     const candidates: Array<{ peer_id: string; ema: number }> = [];
     const { seeder, furrow } = control;
 
-    for (const [peer_id, entry] of this.known_peers) {
+    for (const [peer_id, entry] of this.connected_peers) {
       if (entry.bb) {
         let matched = false;
         for (const [seeder_entry, furrow_set] of entry.bb) {
