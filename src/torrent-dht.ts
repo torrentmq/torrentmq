@@ -12,7 +12,7 @@ import {
 import { TorrentUtils } from "./torrent-utils";
 
 export class TorrentDHTNode extends TorrentEmitter<
-  TorrentEventName | "CONTROL_MESSAGE"
+  TorrentEventName | "CONTROL_MESSAGE" | "STATUS_UPDATE"
 > {
   protected data_store: TorrentLRUCache<string, TorrentControlMessage> =
     new TorrentLRUCache<string, TorrentControlMessage>(1024);
@@ -24,18 +24,30 @@ export class TorrentDHTNode extends TorrentEmitter<
   protected utils: TorrentUtils = new TorrentUtils();
   private signaller: TorrentSignaller = new TorrentSignaller();
 
+  protected peer_graph: Map<string, Set<string>> = new Map();
   readonly identifier: string = this.utils.random_string(20);
+  readonly min_peers: number = 3;
   readonly max_peers: number = 8;
-  // how ofter to get status in ms
+  // frequency of sampling new peers
+  readonly partition_heal_interval: number = 30000;
+  // how often to get status in ms
   readonly status_frequency_check: number = 15000;
 
-  constructor(options?: { max_peers?: number; status_frequency?: number }) {
+  constructor(options?: {
+    min_peers?: number;
+    max_peers?: number;
+    status_frequency?: number;
+    partion_heal_interval?: number;
+  }) {
     super();
 
     if (options) {
+      if (options?.min_peers) this.min_peers = options.min_peers;
       if (options?.max_peers) this.max_peers = options.max_peers;
       if (options?.status_frequency)
         this.status_frequency_check = options.status_frequency;
+      if (options?.partion_heal_interval)
+        this.partition_heal_interval = options.partion_heal_interval;
     }
 
     // route incoming signalling messages into this instance
@@ -63,6 +75,13 @@ export class TorrentDHTNode extends TorrentEmitter<
       });
 
     setInterval(() => {
+      if (this.known_peers.size < this.min_peers) {
+        // request HELO from signaller or reconnect to random known peer
+        this.signaller.send({ type: "HELO", from: this.identifier });
+      }
+    }, this.partition_heal_interval);
+
+    setInterval(() => {
       this.known_peers.forEach((p) =>
         this._get_connection_cost(p.pc).then(
           (res) =>
@@ -78,11 +97,25 @@ export class TorrentDHTNode extends TorrentEmitter<
         ),
       );
 
+      const peer_metrics = Array.from(this.known_peers.values());
+
+      const avg_rtt =
+        peer_metrics.reduce((a, b) => a + (b?.stats?.rtt ?? 0), 0) /
+          peer_metrics.length || 0;
+      const avg_plr =
+        peer_metrics.reduce((a, b) => a + (b?.stats?.plr ?? 0), 0) /
+          peer_metrics.length || 0;
+
       if (this.known_peers.size > 0) {
         const status_broadcast: TorrentSignalMessage = {
           type: "STATUS",
           from: this.identifier,
-          peers: [...this.known_peers.keys()],
+          stats: {
+            rtt: avg_rtt,
+            plr: avg_plr,
+            accepting_connections: this.known_peers.size < this.max_peers,
+            connected_peers: [...this.known_peers.keys()],
+          },
         };
 
         this.signaller.send(status_broadcast);
@@ -105,6 +138,14 @@ export class TorrentDHTNode extends TorrentEmitter<
       if (peer.dc && peer.dc.readyState === "open")
         peer.dc.send(JSON.stringify(data));
     });
+  }
+
+  get_network_graph(): Map<string, string[]> {
+    const graph = new Map<string, string[]>();
+    this.peer_graph.forEach((neighbors, peer_id) => {
+      graph.set(peer_id, Array.from(neighbors));
+    });
+    return graph;
   }
 
   close_peer_connection(peer_id: string) {
@@ -530,22 +571,22 @@ export class TorrentDHTNode extends TorrentEmitter<
   private _handle_status(
     msg: Extract<TorrentSignalMessage, { type: "STATUS" }>,
   ) {
-    // msg.peers contains the peer stats from the remote node
+    // track which peers are connected to which
+    const from = msg.from;
+    const connected_peers = new Set(msg?.stats?.connected_peers);
 
-    msg.peers.forEach((remote_id) => {
-      if (remote_id === this.identifier) return;
-      if (this.known_peers.has(remote_id)) return;
+    // Update graph entry for this peer
+    this.peer_graph.set(from, connected_peers);
 
-      // Evict worst peer if at max
-      if (this.known_peers.size >= this.max_peers) {
-        const worst_peer = this._get_worst_peer();
-        if (worst_peer) this.close_peer_connection(worst_peer);
-        else return; // no peer to evict
+    // Also make sure all peers exist in the graph (even if they have no connections yet)
+    connected_peers.forEach((peer_id) => {
+      if (!this.peer_graph.has(peer_id)) {
+        this.peer_graph.set(peer_id, new Set());
       }
-
-      // Attempt to connect to new peer
-      this._initiate_connection_to_peer(remote_id);
     });
+
+    // msg.peers contains the peer stats from the remote node
+    this.emit("STATUS_UPDATE", msg);
   }
 
   private async _get_connection_cost(pc: RTCPeerConnection) {

@@ -120,7 +120,12 @@ export type TorrentSignalMessage =
       type: "STATUS";
       from: string;
       to?: string;
-      peers: string[];
+      stats?: {
+        plr?: number;
+        rtt?: number;
+        accepting_connections?: boolean;
+        connected_peers?: string[];
+      };
     };
 
 export type TorrentRTCMessage = {
