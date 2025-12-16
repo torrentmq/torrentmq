@@ -2,6 +2,10 @@ import { TorrentFurrow } from "./torrent-furrow";
 import { TorrentPeer } from "./torrent-peer";
 import { TorrentSeeder } from "./torrent-seeder";
 import {
+  TorrentBindingKey,
+  TorrentBindingKeyOf,
+  TorrentBindingTuple,
+  TorrentBindingTupleOf,
   TorrentFurrowParams,
   TorrentMessageParams,
   TorrentSeederParams,
@@ -72,6 +76,18 @@ export class TorrentUtils {
 
   is_furrow(arg: unknown): arg is TorrentFurrow {
     return arg !== null && arg instanceof TorrentFurrow;
+  }
+
+  serialize_binding_key<T extends TorrentBindingTuple>(
+    value: T,
+  ): TorrentBindingKeyOf<T> {
+    return JSON.stringify(value) as TorrentBindingKeyOf<T>;
+  }
+
+  deserialize_binding_key<K extends TorrentBindingKey>(
+    value: K,
+  ): TorrentBindingTupleOf<K> {
+    return JSON.parse(value) as TorrentBindingTupleOf<K>;
   }
 
   rendezvous_hash(key: string, nodes: string[], count = 1): string[] {

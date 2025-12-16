@@ -84,14 +84,16 @@ export type TorrentControlBindFurrow = TorrentControlSeederOrFurrow & {
 
 type TorrentControlPeerInfo = {
   control_id: string;
-  peer_id: string;
+  from: string;
+  to?: string;
   seeder: TorrentControlSeederOrFurrow;
   furrow?: TorrentControlSeederOrFurrow;
 };
 
 type TorrentControlPeerBindInfo = {
   control_id: string;
-  peer_id: string;
+  from: string;
+  to?: string;
   seeder: TorrentControlSeederOrFurrow;
   furrow?: TorrentControlBindFurrow;
 };
@@ -103,6 +105,7 @@ export type TorrentControlMessage =
       type: "PUBLISH";
       message?: TorrentMessageObject;
     })
+  | (TorrentControlPeerInfo & { type: "MIGRATE" })
   | (TorrentControlPeerInfo & { type: "FIND" })
   | (TorrentControlPeerInfo & { type: "FOUND" })
   | (TorrentControlPeerInfo & { type: "NOT_FOUND" })
@@ -137,11 +140,39 @@ export type TorrentRTCMessage = {
 
 export type TorrentSignalHandler = (msg: TorrentSignalMessage) => void;
 
+type TorrentBrand<K, T> = K & { readonly __brand: T };
+
+export type TorrentSeederKey = TorrentBrand<string, "SeederKey">;
+export type TorrentFurrowKey = TorrentBrand<string, "FurrowKey">;
+
+export type TorrentSeederTuple = readonly [string, string];
+export type TorrentFurrowTuple = readonly [string, string, string];
+
 // map [seeder_id, seeder_name] -> [furrow_id, furrow_name, routing_key][]
 export type TorrentBrokerBindings = Map<
-  [string, string],
-  Set<[string, string, string]>
+  TorrentSeederKey,
+  Set<TorrentFurrowKey>
 >;
+
+export type TorrentBindingTuple = TorrentSeederTuple | TorrentFurrowTuple;
+// Union type of all keys
+export type TorrentBindingKey = TorrentSeederKey | TorrentFurrowKey;
+
+// Helper type to map tuple -> key
+export type TorrentBindingKeyOf<T extends TorrentBindingTuple> =
+  T extends TorrentSeederTuple
+    ? TorrentSeederKey
+    : T extends TorrentFurrowTuple
+      ? TorrentFurrowKey
+      : never;
+
+// Helper type to map key -> tuple
+export type TorrentBindingTupleOf<K extends TorrentBindingKey> =
+  K extends TorrentSeederKey
+    ? TorrentSeederTuple
+    : K extends TorrentFurrowKey
+      ? TorrentFurrowTuple
+      : never;
 
 export type TorrentPeerQuality =
   | "EXCELLENT"

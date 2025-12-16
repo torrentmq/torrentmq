@@ -10,16 +10,28 @@ import {
 export class TorrentPeer extends TorrentDHTNode {
   // the hosted seeders and or furrows [seeder_name] -> [furrow_name][]
   private hosted: Map<[string], Set<[string]>> = new Map();
-  readonly is_connected: boolean = false;
+  private is_connected: boolean = false;
 
-  constructor() {
-    super();
+  constructor(options?: {
+    ws_url?: string;
+    min_peers?: number;
+    max_peers?: number;
+    status_frequency?: number;
+    partion_heal_interval?: number;
+    lru_size?: number;
+  }) {
+    super(options);
 
     this.on<{ parsed: TorrentControlMessage; remote_id: string }>(
       "CONTROL_MESSAGE",
       (data) => {
         this._handle_control_message(data.parsed, data.remote_id);
       },
+    );
+
+    this.on<{ dht_node_id: string }>(
+      "PEER_CONNECTED",
+      () => (this.is_connected = true),
     );
   }
 
@@ -32,7 +44,7 @@ export class TorrentPeer extends TorrentDHTNode {
     const control: TorrentControlMessage = {
       type: "ANNOUNCE_BIND",
       control_id: this.utils.random_string(),
-      peer_id: this.identifier,
+      from: this.identifier,
       seeder,
       furrow,
     };
@@ -50,7 +62,7 @@ export class TorrentPeer extends TorrentDHTNode {
     const control: TorrentControlMessage = {
       type: "ANNOUNCE_UNBIND",
       control_id: this.utils.random_string(),
-      peer_id: this.identifier,
+      from: this.identifier,
       seeder,
       furrow,
     };
@@ -73,7 +85,7 @@ export class TorrentPeer extends TorrentDHTNode {
     const control: TorrentControlMessage = {
       type: "PUBLISH",
       control_id: this.utils.random_string(),
-      peer_id: this.identifier,
+      from: this.identifier,
       seeder: msg.seeder,
       furrow: msg?.furrow,
       message: publish_msg,
@@ -90,7 +102,7 @@ export class TorrentPeer extends TorrentDHTNode {
     const control: TorrentControlMessage = {
       type: "FIND",
       control_id: this.utils.random_string(),
-      peer_id: this.identifier,
+      from: this.identifier,
       seeder,
       furrow,
     };
@@ -137,7 +149,7 @@ export class TorrentPeer extends TorrentDHTNode {
     from_peer_id?: string,
   ) {
     // ensure peer entry has bb map
-    const peer = this.connected_peers.get(from_peer_id ?? control.peer_id);
+    const peer = this.connected_peers.get(from_peer_id ?? control.from);
     if (peer && !peer.bb) peer.bb = new Map();
 
     switch (control.type) {
@@ -147,12 +159,14 @@ export class TorrentPeer extends TorrentDHTNode {
           control.seeder.id,
           control.seeder.name,
         ];
-        let furrow_set = peer.bb.get(seeder_key);
+        let furrow_set = peer.bb.get(
+          this.utils.serialize_binding_key(seeder_key),
+        );
 
         if (!furrow_set) {
           // If no furrows are bound to this seeder yet, create a new Set
           furrow_set = new Set();
-          peer.bb.set(seeder_key, furrow_set);
+          peer.bb.set(this.utils.serialize_binding_key(seeder_key), furrow_set);
         }
 
         // If a furrow is provided, add the furrow to the set for this seeder
@@ -160,9 +174,9 @@ export class TorrentPeer extends TorrentDHTNode {
           const furrow_key: [string, string, string] = [
             control.furrow.id,
             control.furrow.name,
-            control.furrow.routing_key ?? from_peer_id ?? control.peer_id,
+            control.furrow.routing_key ?? from_peer_id ?? control.from,
           ];
-          furrow_set.add(furrow_key);
+          furrow_set.add(this.utils.serialize_binding_key(furrow_key));
         }
 
         this.emit("PEER_BIND", {
@@ -179,21 +193,23 @@ export class TorrentPeer extends TorrentDHTNode {
           control.seeder.id,
           control.seeder.name,
         ];
-        let furrow_set = peer.bb.get(seeder_key);
+        let furrow_set = peer.bb.get(
+          this.utils.serialize_binding_key(seeder_key),
+        );
 
         if (!furrow_set && control.furrow) break;
         if (control.furrow?.id && control.furrow?.name) {
           const furrow_key: [string, string, string] = [
             control.furrow.id,
             control.furrow.name,
-            control.furrow.routing_key ?? from_peer_id ?? control.peer_id,
+            control.furrow.routing_key ?? from_peer_id ?? control.from,
           ];
           // Remove furrow
-          furrow_set?.delete(furrow_key);
+          furrow_set?.delete(this.utils.serialize_binding_key(furrow_key));
         }
         if (!control.furrow) {
           // Remove seeder
-          peer.bb.delete(seeder_key);
+          peer.bb.delete(this.utils.serialize_binding_key(seeder_key));
         }
 
         this.emit("PEER_UNBIND", {
@@ -256,7 +272,7 @@ export class TorrentPeer extends TorrentDHTNode {
     msg: Extract<TorrentControlMessage, { type: "PUBLISH" }>,
   ) {
     // ignore if message from self
-    if (msg.peer_id === this.identifier) return;
+    if (msg.from === this.identifier) return;
 
     // already processed, skip entirely
     if (this.data_store.has(msg.control_id)) return;
@@ -326,7 +342,7 @@ export class TorrentPeer extends TorrentDHTNode {
     const fnd_msg: TorrentControlMessage = {
       type: "FOUND",
       control_id: this.utils.random_string(),
-      peer_id: this.identifier,
+      from: this.identifier,
       seeder: undefined as any, // fill in later
     };
 
@@ -367,11 +383,16 @@ export class TorrentPeer extends TorrentDHTNode {
     furrow?: TorrentControlBindFurrow,
   ) {
     const seeder_key: [string, string] = [seeder.id, seeder.name];
-    let furrow_set = this.broker_bindings.get(seeder_key);
+    let furrow_set = this.broker_bindings.get(
+      this.utils.serialize_binding_key(seeder_key),
+    );
 
     if (!furrow_set) {
       furrow_set = new Set();
-      this.broker_bindings.set(seeder_key, furrow_set);
+      this.broker_bindings.set(
+        this.utils.serialize_binding_key(seeder_key),
+        furrow_set,
+      );
     }
 
     if (furrow?.id && furrow?.name) {
@@ -380,7 +401,7 @@ export class TorrentPeer extends TorrentDHTNode {
         furrow.name,
         furrow.routing_key ?? this.identifier,
       ];
-      furrow_set.add(furrow_key);
+      furrow_set.add(this.utils.serialize_binding_key(furrow_key));
     }
   }
 
@@ -389,7 +410,9 @@ export class TorrentPeer extends TorrentDHTNode {
     furrow?: TorrentControlBindFurrow,
   ) {
     const seeder_key: [string, string] = [seeder.id, seeder.name];
-    let furrow_set = this.broker_bindings.get(seeder_key);
+    let furrow_set = this.broker_bindings.get(
+      this.utils.serialize_binding_key(seeder_key),
+    );
 
     if (!furrow_set && furrow) return;
     if (furrow?.id && furrow?.name) {
@@ -398,10 +421,10 @@ export class TorrentPeer extends TorrentDHTNode {
         furrow.name,
         furrow.routing_key ?? this.identifier,
       ];
-      furrow_set?.delete(furrow_key);
+      furrow_set?.delete(this.utils.serialize_binding_key(furrow_key));
       return;
     }
-    this.broker_bindings.delete(seeder_key);
+    this.broker_bindings.delete(this.utils.serialize_binding_key(seeder_key));
   }
 
   private async _forward_msg(
@@ -458,6 +481,7 @@ export class TorrentPeer extends TorrentDHTNode {
   // choose the best peer based on latency, bandwidth, etc.
   // It seems that A* makes no sense for this.
   // Will be pivoting to Weighted K-Best Forwarding (W-KBF)
+  // Which is a more efficient version of flodding.
   private async _calculate_candidates(
     control: Extract<TorrentControlMessage, { type: "PUBLISH" }>,
   ): Promise<{ peer_id: string; ema: number }[]> {

@@ -12,9 +12,24 @@ export class TorrentSignaller {
   readonly token?: string;
   on_message?: TorrentSignalHandler;
 
-  constructor() {
+  constructor(url?: string) {
     // NOTE: Port for connection is 32625
-    this.url = this.get_ws_url();
+    const { is_secure } = this._security_and_host();
+
+    if (url) {
+      if (!/^wss?:\/\//.test(url)) {
+        throw new TorrentError(
+          `Invalid WebSocket URL protocol. Expected: ws:// or wss://. Received: ${url}`,
+        );
+      }
+
+      if (is_secure && !url.startsWith("wss://")) {
+        throw new TorrentError(
+          `Insecure WebSocket URL detected. This application is running over HTTPS, so a secure WebSocket (wss://) is required. Received: ${url}`,
+        );
+      }
+    }
+    this.url = url ?? this.get_ws_url();
   }
 
   async connect(): Promise<void> {
@@ -64,8 +79,14 @@ export class TorrentSignaller {
   private get_ws_url() {
     // NOTE: Port for connection is 32625
     const port = 32625;
+    const { host, is_secure } = this._security_and_host();
+    return `${is_secure ? "wss" : "ws"}://${host}:${port}/ws`;
+  }
+
+  private _security_and_host() {
     const is_secure = window.location.protocol === "https:";
     const host = window.location.hostname;
-    return `${is_secure ? "wss" : "ws"}://${host}:${port}/ws`;
+
+    return { host, is_secure };
   }
 }

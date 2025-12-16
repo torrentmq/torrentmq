@@ -21,7 +21,7 @@ export class TorrentDHTNode extends TorrentEmitter<
   protected broker_bindings: TorrentBrokerBindings = new Map();
 
   protected utils: TorrentUtils = new TorrentUtils();
-  private signaller: TorrentSignaller = new TorrentSignaller();
+  private signaller: TorrentSignaller;
 
   protected peer_graph: Map<string, Set<string>> = new Map();
   readonly identifier: string = this.utils.random_string(20);
@@ -33,6 +33,7 @@ export class TorrentDHTNode extends TorrentEmitter<
   readonly status_frequency_check: number = 15000;
 
   constructor(options?: {
+    ws_url?: string;
     min_peers?: number;
     max_peers?: number;
     status_frequency?: number;
@@ -45,12 +46,16 @@ export class TorrentDHTNode extends TorrentEmitter<
       options?.lru_size ?? 1024,
     );
 
+    this.signaller = new TorrentSignaller(options?.ws_url);
+
     if (options) {
-      if (options?.min_peers) this.min_peers = options.min_peers;
-      if (options?.max_peers) this.max_peers = options.max_peers;
-      if (options?.status_frequency)
+      if (options?.min_peers && options?.min_peers > 0)
+        this.min_peers = options.min_peers;
+      if (options?.max_peers && options?.max_peers > 0)
+        this.max_peers = options.max_peers;
+      if (options?.status_frequency && options?.status_frequency > 0)
         this.status_frequency_check = options.status_frequency;
-      if (options?.partion_heal_interval)
+      if (options?.partion_heal_interval && options?.partion_heal_interval > 0)
         this.partition_heal_interval = options.partion_heal_interval;
     }
 
@@ -69,9 +74,9 @@ export class TorrentDHTNode extends TorrentEmitter<
             from: this.identifier,
           };
           this.signaller.send(hello_broadcast);
-          this.emit("PEER_CONNECTED", { dht_node_id: this.identifier });
+          this.emit("PEER_CONNECTED", { peer_id: this.identifier });
         } catch (e) {
-          console.warn("failed to send hello via signaller", e);
+          console.warn("failed to send HELO via signaller", e);
         }
       })
       .catch((err) => {
@@ -79,9 +84,12 @@ export class TorrentDHTNode extends TorrentEmitter<
       });
 
     setInterval(() => {
-      if (this.connected_peers.size < this.min_peers) {
+      if (this.connected_peers.size < this.min_peers)
         // request HELO from signaller or reconnect to random known peer
         this.signaller.send({ type: "HELO", from: this.identifier });
+      if (this.connected_peers.size > this.max_peers) {
+        const worst_peer = this._get_worst_peer();
+        if (worst_peer) this.close_peer_connection(worst_peer);
       }
     }, this.partition_heal_interval);
 
@@ -128,7 +136,8 @@ export class TorrentDHTNode extends TorrentEmitter<
   }
 
   store(data: TorrentControlMessage) {
-    this.data_store.set(data.control_id, data);
+    if (this.identifier !== data.from)
+      this.data_store.set(data.control_id, data);
     this.replicate_data(data);
   }
 
@@ -159,6 +168,7 @@ export class TorrentDHTNode extends TorrentEmitter<
       entry.pc.close();
     } catch (e) {}
     this.connected_peers.delete(peer_id);
+    this.peer_graph.delete(peer_id);
     this.emit("PEER_DISCONNECTED", { peer_id: peer_id });
   }
 
@@ -227,6 +237,7 @@ export class TorrentDHTNode extends TorrentEmitter<
         state === "closed"
       ) {
         this.connected_peers.delete(remote_id);
+        this.peer_graph.delete(remote_id);
         this.emit("PEER_DISCONNECTED", { peer_id: remote_id });
       }
     };
@@ -250,17 +261,21 @@ export class TorrentDHTNode extends TorrentEmitter<
 
       // announce binds for currently bound seeders when channel opens
       for (const [seeder, furrow_set] of this.broker_bindings) {
-        const [seeder_id, seeder_name] = seeder;
+        const [seeder_id, seeder_name] =
+          this.utils.deserialize_binding_key(seeder);
 
         const announce: TorrentControlMessage = {
           type: "ANNOUNCE_BIND",
           control_id: this.utils.random_string(),
-          peer_id: this.identifier,
+          from: this.identifier,
           seeder: { id: seeder_id, name: seeder_name },
         };
 
         if (furrow_set.size > 0) {
-          for (const [furrow_id, furrow_name, furrow_rkey] of furrow_set) {
+          for (const furrow of furrow_set) {
+            const [furrow_id, furrow_name, furrow_rkey] =
+              this.utils.deserialize_binding_key(furrow);
+
             const announce_with_furrow: TorrentControlMessage = {
               ...announce,
               furrow: {
@@ -306,6 +321,7 @@ export class TorrentDHTNode extends TorrentEmitter<
 
     dc.onclose = () => {
       this.connected_peers.delete(remote_id);
+      this.peer_graph.delete(remote_id);
       this.emit("PEER_DISCONNECTED", { peer_id: remote_id });
     };
   }
@@ -540,28 +556,29 @@ export class TorrentDHTNode extends TorrentEmitter<
 
   private _handle_helo(msg: Extract<TorrentSignalMessage, { type: "HELO" }>) {
     // HELO auto-discovery: when a peer broadcasts HELO we start initiating a connection to them
-    const from = msg.from as string;
+    const from = msg.from;
     // if we already have a connection to them, ignore
     if (from === this.identifier) return;
-    // they might not have discovered this peer so say "HIHI"
     if (this.connected_peers.has(from)) return;
     // dont add new peers when at max
+    // disconnect if over max
     if (this.connected_peers.size >= this.max_peers) {
       const worst_peer = this._get_worst_peer();
       if (worst_peer) this.close_peer_connection(worst_peer);
-      return;
     }
-    if (msg.from !== this.identifier) {
-      const hello_broadcast: TorrentSignalMessage = {
+
+    if (this.connected_peers.size < this.max_peers) {
+      // they might not have discovered this peer so say "HIHI"
+      const hihi_broadcast: TorrentSignalMessage = {
         type: "HIHI",
         from: this.identifier,
         to: msg.from,
       };
-      this.signaller.send(hello_broadcast);
-    }
+      this.signaller.send(hihi_broadcast);
 
-    // create pc + dc and send OFFER (deterministic tie-break inside)
-    this._initiate_connection_to_peer(from);
+      // create pc + dc and send OFFER (deterministic tie-break inside)
+      this._initiate_connection_to_peer(from);
+    }
   }
 
   private _handle_hihi(msg: Extract<TorrentSignalMessage, { type: "HIHI" }>) {
@@ -575,16 +592,19 @@ export class TorrentDHTNode extends TorrentEmitter<
   private _handle_status(
     msg: Extract<TorrentSignalMessage, { type: "STATUS" }>,
   ) {
-    // track which peers are connected to which
     const from = msg.from;
+    if (from === this.identifier) return;
+
+    // track which peers are connected to which
+    // ensure to ignore self
     const connected_peers = new Set(msg?.stats?.connected_peers);
 
-    // Update graph entry for this peer
+    // update graph entry for this peer
     this.peer_graph.set(from, connected_peers);
 
     // Also make sure all peers exist in the graph (even if they have no connections yet)
     connected_peers.forEach((peer_id) => {
-      if (!this.peer_graph.has(peer_id)) {
+      if (!this.peer_graph.has(peer_id) && peer_id !== this.identifier) {
         this.peer_graph.set(peer_id, new Set());
       }
     });
