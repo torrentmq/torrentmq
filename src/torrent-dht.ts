@@ -25,8 +25,8 @@ export class TorrentDHTNode extends TorrentEmitter<
 
   protected peer_graph: Map<string, Set<string>> = new Map();
   readonly identifier: string = this.utils.random_string(20);
-  readonly min_peers: number = 3;
-  readonly max_peers: number = 8;
+  readonly min_peer_cluster_size: number = 3;
+  readonly max_peer_cluster_size: number = 8;
   // frequency of sampling new peers
   readonly partition_heal_interval: number = 30000;
   // how often to get status in ms
@@ -34,8 +34,8 @@ export class TorrentDHTNode extends TorrentEmitter<
 
   constructor(options?: {
     ws_url?: string;
-    min_peers?: number;
-    max_peers?: number;
+    min_peer_cluster_size?: number;
+    max_peer_cluster_size?: number;
     status_frequency?: number;
     partion_heal_interval?: number;
     lru_size?: number;
@@ -49,10 +49,10 @@ export class TorrentDHTNode extends TorrentEmitter<
     this.signaller = new TorrentSignaller(options?.ws_url);
 
     if (options) {
-      if (options?.min_peers && options?.min_peers > 0)
-        this.min_peers = options.min_peers;
-      if (options?.max_peers && options?.max_peers > 0)
-        this.max_peers = options.max_peers;
+      if (options?.min_peer_cluster_size && options?.min_peer_cluster_size > 0)
+        this.min_peer_cluster_size = options.min_peer_cluster_size;
+      if (options?.max_peer_cluster_size && options?.max_peer_cluster_size > 0)
+        this.max_peer_cluster_size = options.max_peer_cluster_size;
       if (options?.status_frequency && options?.status_frequency > 0)
         this.status_frequency_check = options.status_frequency;
       if (options?.partion_heal_interval && options?.partion_heal_interval > 0)
@@ -84,10 +84,24 @@ export class TorrentDHTNode extends TorrentEmitter<
       });
 
     setInterval(() => {
-      if (this.connected_peers.size < this.min_peers)
+      // clean up dead peers
+      // carry out before size checks to ensure
+      // a. HELO messages are sent to connect to new peers
+      // b. avoid removing some connected peers with data channels
+      const peers_to_close = [];
+
+      for (const [peer_id, peer] of this.connected_peers) {
+        if (!peer.dc || peer.dc.readyState !== "open") {
+          peers_to_close.push(peer_id);
+        }
+      }
+
+      peers_to_close.forEach((peer_id) => this.close_peer_connection(peer_id));
+
+      if (this.connected_peers.size < this.min_peer_cluster_size)
         // request HELO from signaller or reconnect to random known peer
         this.signaller.send({ type: "HELO", from: this.identifier });
-      if (this.connected_peers.size > this.max_peers) {
+      if (this.connected_peers.size > this.max_peer_cluster_size) {
         const worst_peer = this._get_worst_peer();
         if (worst_peer) this.close_peer_connection(worst_peer);
       }
@@ -125,7 +139,8 @@ export class TorrentDHTNode extends TorrentEmitter<
           stats: {
             rtt: avg_rtt,
             plr: avg_plr,
-            accepting_connections: this.connected_peers.size < this.max_peers,
+            accepting_connections:
+              this.connected_peers.size < this.max_peer_cluster_size,
             connected_peers: [...this.connected_peers.keys()],
           },
         };
@@ -562,12 +577,12 @@ export class TorrentDHTNode extends TorrentEmitter<
     if (this.connected_peers.has(from)) return;
     // dont add new peers when at max
     // disconnect if over max
-    if (this.connected_peers.size >= this.max_peers) {
+    if (this.connected_peers.size >= this.max_peer_cluster_size) {
       const worst_peer = this._get_worst_peer();
       if (worst_peer) this.close_peer_connection(worst_peer);
     }
 
-    if (this.connected_peers.size < this.max_peers) {
+    if (this.connected_peers.size < this.max_peer_cluster_size) {
       // they might not have discovered this peer so say "HIHI"
       const hihi_broadcast: TorrentSignalMessage = {
         type: "HIHI",

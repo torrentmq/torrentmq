@@ -14,8 +14,8 @@ export class TorrentPeer extends TorrentDHTNode {
 
   constructor(options?: {
     ws_url?: string;
-    min_peers?: number;
-    max_peers?: number;
+    min_peer_cluster_size?: number;
+    max_peer_cluster_size?: number;
     status_frequency?: number;
     partion_heal_interval?: number;
     lru_size?: number;
@@ -79,7 +79,6 @@ export class TorrentPeer extends TorrentDHTNode {
     const publish_msg: TorrentMessageObject = {
       body: msg.message?.body,
       properties: msg.message?.properties,
-      on_ack: msg.message?.on_ack,
     };
 
     const control: TorrentControlMessage = {
@@ -257,13 +256,11 @@ export class TorrentPeer extends TorrentDHTNode {
     }
   }
 
-  // handle publishing locally (and optionally broadcasting if desired)
   private _handle_publish(
     msg: Extract<TorrentControlMessage, { type: "PUBLISH" }>,
   ) {
-    // We broadcast PUBLISH to other peers if we receive a local publish that should be relayed.
-    // But to avoid loops, PUBLISH arriving over DC should be handled by _handle_receive (not this function).
-    // When called for a local origin, broadcast to peers (DCs only)
+    // We broadcast a message to other peers and emit a PUBLISH event.
+    // Broadcast to connected peers (DCs only)
     this._broadcast_control(msg);
     this.emit("PUBLISH", msg);
   }

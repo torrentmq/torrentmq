@@ -31,7 +31,7 @@ export type TorrentAckCallBack = (data: any) => void;
 export type TorrentMessageObject = {
   body?: TorrentMessageBody;
   properties?: TorrentMessageProperties;
-} & Pick<TorrentMessageParams, "on_ack">;
+};
 
 export type TorrentMessageBody =
   | Uint8Array
