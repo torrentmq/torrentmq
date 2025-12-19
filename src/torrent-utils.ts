@@ -6,9 +6,15 @@ import {
   TorrentBindingKeyOf,
   TorrentBindingTuple,
   TorrentBindingTupleOf,
+  TorrentDeserializeObjOf,
   TorrentFurrowParams,
+  TorrentHostedKey,
+  TorrentHostedKeyOf,
+  TorrentHostedObj,
+  TorrentHostedObjOf,
   TorrentMessageParams,
   TorrentSeederParams,
+  TorrentSerializeKeyOf,
 } from "./torrent-types";
 
 export class TorrentUtils {
@@ -28,8 +34,6 @@ export class TorrentUtils {
       .map((byte) => charset[byte % charset.length])
       .join("");
   }
-
-  clone() {}
 
   is_message_params(arg: unknown): arg is TorrentMessageParams {
     return (
@@ -78,16 +82,23 @@ export class TorrentUtils {
     return arg !== null && arg instanceof TorrentFurrow;
   }
 
-  serialize_binding_key<T extends TorrentBindingTuple>(
+  serialize<T extends TorrentBindingTuple | TorrentHostedObj>(
     value: T,
-  ): TorrentBindingKeyOf<T> {
-    return JSON.stringify(value) as TorrentBindingKeyOf<T>;
+  ): TorrentSerializeKeyOf<T> {
+    return JSON.stringify(value) as TorrentSerializeKeyOf<T>;
   }
 
-  deserialize_binding_key<K extends TorrentBindingKey>(
+  deserialize<K extends TorrentBindingKey | TorrentHostedKey>(
     value: K,
-  ): TorrentBindingTupleOf<K> {
-    return JSON.parse(value) as TorrentBindingTupleOf<K>;
+  ): TorrentDeserializeObjOf<K> {
+    return JSON.parse(value) as TorrentDeserializeObjOf<K>;
+  }
+
+  static base64_url(buffer: ArrayBuffer): string {
+    return btoa(String.fromCharCode(...new Uint8Array(buffer)))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
   }
 
   rendezvous_hash(key: string, nodes: string[], count = 1): string[] {

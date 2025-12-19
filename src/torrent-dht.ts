@@ -276,8 +276,7 @@ export class TorrentDHTNode extends TorrentEmitter<
 
       // announce binds for currently bound seeders when channel opens
       for (const [seeder, furrow_set] of this.broker_bindings) {
-        const [seeder_id, seeder_name] =
-          this.utils.deserialize_binding_key(seeder);
+        const [seeder_id, seeder_name] = this.utils.deserialize(seeder);
 
         const announce: TorrentControlMessage = {
           type: "ANNOUNCE_BIND",
@@ -289,7 +288,7 @@ export class TorrentDHTNode extends TorrentEmitter<
         if (furrow_set.size > 0) {
           for (const furrow of furrow_set) {
             const [furrow_id, furrow_name, furrow_rkey] =
-              this.utils.deserialize_binding_key(furrow);
+              this.utils.deserialize(furrow);
 
             const announce_with_furrow: TorrentControlMessage = {
               ...announce,

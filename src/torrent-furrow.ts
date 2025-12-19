@@ -59,6 +59,17 @@ export class TorrentFurrow {
     if (options?.auto_plant) this.plant();
     if (options?.auto_bind) this.bind();
 
+    this.peer.find(
+      {
+        id: this.seeder.identifier,
+        name: this.seeder.name,
+      },
+      {
+        id: this.identifier,
+        name: this.name,
+      },
+    );
+
     return this;
   }
 

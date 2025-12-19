@@ -1,4 +1,3 @@
-export { TorrentBroker } from "./torrent-broker";
 export { TorrentError } from "./torrent-error";
 export { TorrentFurrow } from "./torrent-furrow";
 export { TorrentMessage } from "./torrent-message";

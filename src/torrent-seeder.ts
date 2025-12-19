@@ -40,6 +40,11 @@ export class TorrentSeeder {
     this.options = options ?? {};
     this.peer = rtc_client;
 
+    this.peer.find({
+      id: this.identifier,
+      name: this.name,
+    });
+
     this.peer.register_remote_binding({ id: this.identifier, name: this.name });
 
     return this;
