@@ -24,7 +24,7 @@ export class TorrentDHTNode extends TorrentEmitter<
   private signaller: TorrentSignaller;
 
   protected peer_graph: Map<string, Set<string>> = new Map();
-  readonly identifier: string = this.utils.random_string(20);
+  readonly identifier: string = TorrentUtils.random_string(20);
   readonly min_peer_cluster_size: number = 3;
   readonly max_peer_cluster_size: number = 8;
   // frequency of sampling new peers
@@ -200,7 +200,7 @@ export class TorrentDHTNode extends TorrentEmitter<
 
     // if we expect to create the datachannel locally (we are the deterministic offerer)
     if (create_dc) {
-      dc = pc.createDataChannel(this.utils.random_string());
+      dc = pc.createDataChannel(TorrentUtils.random_string());
       this._attach_dc_handlers(dc, remote_id);
     }
 
@@ -276,26 +276,28 @@ export class TorrentDHTNode extends TorrentEmitter<
 
       // announce binds for currently bound seeders when channel opens
       for (const [seeder, furrow_set] of this.broker_bindings) {
-        const [seeder_id, seeder_name] = this.utils.deserialize(seeder);
+        const deserialized_seeder = this.utils.deserialize(seeder);
 
         const announce: TorrentControlMessage = {
           type: "ANNOUNCE_BIND",
-          control_id: this.utils.random_string(),
+          control_id: TorrentUtils.random_string(),
           from: this.identifier,
-          seeder: { id: seeder_id, name: seeder_name },
+          seeder: {
+            id: deserialized_seeder.seeder_id,
+            name: deserialized_seeder.name,
+          },
         };
 
         if (furrow_set.size > 0) {
           for (const furrow of furrow_set) {
-            const [furrow_id, furrow_name, furrow_rkey] =
-              this.utils.deserialize(furrow);
+            const deserialized_furrow = this.utils.deserialize(furrow);
 
             const announce_with_furrow: TorrentControlMessage = {
               ...announce,
               furrow: {
-                id: furrow_id,
-                name: furrow_name,
-                routing_key: furrow_rkey,
+                id: deserialized_furrow.furrow_id,
+                name: deserialized_furrow.name,
+                routing_key: deserialized_furrow.routing_key,
               },
             };
             try {

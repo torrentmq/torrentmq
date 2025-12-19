@@ -1,26 +1,21 @@
-import { TorrentFurrow } from "./torrent-furrow";
-import { TorrentPeer } from "./torrent-peer";
-import { TorrentSeeder } from "./torrent-seeder";
 import {
   TorrentBindingKey,
-  TorrentBindingKeyOf,
-  TorrentBindingTuple,
-  TorrentBindingTupleOf,
-  TorrentDeserializeObjOf,
+  TorrentBindingObj,
   TorrentFurrowParams,
   TorrentHostedKey,
-  TorrentHostedKeyOf,
   TorrentHostedObj,
-  TorrentHostedObjOf,
   TorrentMessageParams,
-  TorrentSeederParams,
+  TorrentDeserializeObjOf,
   TorrentSerializeKeyOf,
+  TorrentSeederParams,
 } from "./torrent-types";
 
 export class TorrentUtils {
   constructor() {}
+  private static encoder = new TextEncoder();
+  private static decoder = new TextDecoder();
 
-  random_string(minLength = 8, maxLength = 16) {
+  static random_string(minLength = 8, maxLength = 16) {
     const charset =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_-+=<>?";
 
@@ -70,19 +65,7 @@ export class TorrentUtils {
     );
   }
 
-  is_peer(arg: unknown): arg is TorrentPeer {
-    return arg !== null && arg instanceof TorrentPeer;
-  }
-
-  is_seeder(arg: unknown): arg is TorrentSeeder {
-    return arg !== null && arg instanceof TorrentSeeder;
-  }
-
-  is_furrow(arg: unknown): arg is TorrentFurrow {
-    return arg !== null && arg instanceof TorrentFurrow;
-  }
-
-  serialize<T extends TorrentBindingTuple | TorrentHostedObj>(
+  serialize<T extends TorrentBindingObj | TorrentHostedObj>(
     value: T,
   ): TorrentSerializeKeyOf<T> {
     return JSON.stringify(value) as TorrentSerializeKeyOf<T>;
@@ -94,11 +77,87 @@ export class TorrentUtils {
     return JSON.parse(value) as TorrentDeserializeObjOf<K>;
   }
 
-  static base64_url(buffer: ArrayBuffer): string {
+  static to_base64_url(buffer: ArrayBuffer): string {
     return btoa(String.fromCharCode(...new Uint8Array(buffer)))
       .replace(/\+/g, "-")
       .replace(/\//g, "_")
       .replace(/=+$/, "");
+  }
+
+  static from_base64_url(base64url: string): ArrayBuffer {
+    // 1. Convert from base64url to standard base64
+    let base64 = base64url.replace(/-/g, "+").replace(/_/g, "/");
+
+    // 2. Add padding if missing (Base64 strings must have length % 4 === 0)
+    const padLength = (4 - (base64.length % 4)) % 4;
+    base64 += "=".repeat(padLength);
+
+    // 3. Decode Base64 string to binary string
+    const binaryString = atob(base64);
+
+    // 4. Convert binary string to Uint8Array
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+
+    return bytes.buffer;
+  }
+
+  static to_array_buffer(value: unknown): ArrayBuffer {
+    if (value === null || value === undefined) {
+      return new ArrayBuffer(0);
+    }
+
+    // Already a byte array
+    if (value instanceof Uint8Array) {
+      const copy = new Uint8Array(value.byteLength);
+      copy.set(value);
+      return copy.buffer;
+    }
+
+    let str: string;
+
+    switch (typeof value) {
+      case "string":
+        str = value;
+        break;
+      case "number":
+      case "boolean":
+        str = value.toString();
+        break;
+      case "object":
+        str = JSON.stringify(value);
+        break;
+      default:
+        throw new Error(`Cannot convert type ${typeof value} to ArrayBuffer`);
+    }
+
+    return this.encoder.encode(str).buffer;
+  }
+
+  static from_array_buffer(
+    buffer: ArrayBuffer,
+    typeHint?: "string" | "number" | "boolean" | "object",
+  ): unknown {
+    if (!buffer.byteLength) return null;
+
+    const str = this.decoder.decode(buffer);
+
+    if (!typeHint) return str; // default to string
+
+    switch (typeHint) {
+      case "string":
+        return str;
+      case "number":
+        return Number(str);
+      case "boolean":
+        return str === "true";
+      case "object":
+        return JSON.parse(str);
+      default:
+        throw new Error(`Unsupported typeHint: ${typeHint}`);
+    }
   }
 
   rendezvous_hash(key: string, nodes: string[], count = 1): string[] {

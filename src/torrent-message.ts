@@ -7,7 +7,6 @@ import {
 } from "./torrent-types";
 
 export class TorrentMessage {
-  private utils: TorrentUtils = new TorrentUtils();
   private encoder: TextEncoder = new TextEncoder();
   properties: TorrentMessageProperties;
   on_ack?: TorrentAckCallBack;
@@ -19,7 +18,7 @@ export class TorrentMessage {
     this.on_ack = params?.on_ack;
 
     this.properties = {
-      message_id: this.utils.random_string(),
+      message_id: TorrentUtils.random_string(),
       routing_key: params?.routing_key,
       re_delivered: false,
       body_size: this._compute_body_size(message_body),

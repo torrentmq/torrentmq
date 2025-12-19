@@ -5,9 +5,8 @@ import { TorrentUtils } from "./torrent-utils";
 
 export class TorrentSignaller {
   private ws?: WebSocket;
-  private utils: TorrentUtils = new TorrentUtils();
 
-  readonly identifier: string = this.utils.random_string();
+  readonly identifier: string = TorrentUtils.random_string();
   readonly url: string;
   readonly token?: string;
   on_message?: TorrentSignalHandler;

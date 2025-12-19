@@ -104,7 +104,11 @@ export type TorrentControlMessage =
   | (TorrentControlPeerInfo & {
       type: "PUBLISH";
       message?: TorrentMessageObject;
-      timestamp?: number;
+      seeder: TorrentControlSeederOrFurrow & { public_key: JsonWebKey };
+      artifacts: {
+        timestamp: number;
+        signature: string;
+      };
     })
   | (TorrentControlPeerInfo & { type: "ACK"; message_id: string })
   | (TorrentControlPeerInfo & { type: "FIND" })
@@ -113,7 +117,7 @@ export type TorrentControlMessage =
       control_id: string;
       from: string;
       to?: string;
-      seeder: TorrentSeederHostedObj;
+      seeder: TorrentSeederHostedObj & { public_key: JsonWebKey };
       furrow?: TorrentFurrowHostedObj;
       type: "FOUND";
     }
@@ -197,33 +201,44 @@ type TorrentBrand<K, T> = K & { readonly __brand: T };
 export type TorrentSeederKey = TorrentBrand<string, "SeederKey">;
 export type TorrentFurrowKey = TorrentBrand<string, "FurrowKey">;
 
-export type TorrentSeederTuple = readonly [string, string];
-export type TorrentFurrowTuple = readonly [string, string, string];
+export type TorrentSeederBindingObj = {
+  seeder_id: string;
+  name: string;
+  public_key?: JsonWebKey;
+};
 
-// map [seeder_id, seeder_name] -> [furrow_id, furrow_name, routing_key][]
+export type TorrentFurrowBindingObj = {
+  furrow_id: string;
+  name: string;
+  routing_key: string;
+};
+
+// map [seeder_id, seeder_name, seeder_publick_key] -> [furrow_id, furrow_name, routing_key][]
 export type TorrentBrokerBindings = Map<
   TorrentSeederKey,
   Set<TorrentFurrowKey>
 >;
 
-export type TorrentBindingTuple = TorrentSeederTuple | TorrentFurrowTuple;
+export type TorrentBindingObj =
+  | TorrentSeederBindingObj
+  | TorrentFurrowBindingObj;
 // Union type of all keys
 export type TorrentBindingKey = TorrentSeederKey | TorrentFurrowKey;
 
 // Helper type to map tuple -> key
-export type TorrentBindingKeyOf<T extends TorrentBindingTuple> =
-  T extends TorrentSeederTuple
+export type TorrentBindingKeyOf<T extends TorrentBindingObj> =
+  T extends TorrentSeederBindingObj
     ? TorrentSeederKey
-    : T extends TorrentFurrowTuple
+    : T extends TorrentFurrowBindingObj
       ? TorrentFurrowKey
       : never;
 
 // Helper type to map key -> tuple
 export type TorrentBindingTupleOf<K extends TorrentBindingKey> =
   K extends TorrentSeederKey
-    ? TorrentSeederTuple
+    ? TorrentSeederBindingObj
     : K extends TorrentFurrowKey
-      ? TorrentFurrowTuple
+      ? TorrentFurrowBindingObj
       : never;
 
 export type TorrentBrokerHost = Map<
@@ -238,6 +253,7 @@ export type TorrentFurrowHostedBrand = TorrentBrand<string, "FurrowHostedObj">;
 export type TorrentSeederHostedObj = {
   id: string;
   seeder_name: string;
+  public_key: JsonWebKey;
   properties?: TorrentSeederParams;
 };
 export type TorrentFurrowHostedObj = {
@@ -265,7 +281,7 @@ export type TorrentHostedObjOf<K extends TorrentHostedKey> =
       ? TorrentFurrowHostedObj
       : never;
 
-export type TorrentSerializeKeyOf<T> = T extends TorrentBindingTuple
+export type TorrentSerializeKeyOf<T> = T extends TorrentBindingObj
   ? TorrentBindingKeyOf<T>
   : T extends TorrentHostedObj
     ? TorrentHostedKeyOf<T>

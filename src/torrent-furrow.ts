@@ -7,57 +7,35 @@ import {
   TorrentFurrowParams,
   TorrentMessageBody,
   TorrentMessageParams,
+  TorrentSeederParams,
 } from "./torrent-types";
 import { TorrentUtils } from "./torrent-utils";
-
-// bind is seeder to furrow (seeder is parent)
-// subscribe is furrow to client
 
 export class TorrentFurrow {
   private peers: Map<string, { routing_key: string; is_bound: boolean }> =
     new Map();
-  private peer: TorrentPeer;
-  private is_planted: boolean = false;
   private utils: TorrentUtils = new TorrentUtils();
+  private is_planted: boolean = false;
 
-  readonly identifier: string = this.utils.random_string();
+  private readonly peer: TorrentPeer;
+  private readonly seeder: TorrentSeeder;
+
+  readonly identifier: string;
   readonly name: string;
-  readonly options: TorrentFurrowParams = {};
-  readonly seeder: TorrentSeeder;
+  readonly options: TorrentFurrowParams;
 
-  constructor(
-    arg1?: string | TorrentFurrowParams | TorrentSeeder | TorrentPeer,
-    arg2?: string | TorrentFurrowParams | TorrentSeeder | TorrentPeer,
-    arg3?: string | TorrentFurrowParams | TorrentSeeder | TorrentPeer,
-    arg4?: string | TorrentFurrowParams | TorrentSeeder | TorrentPeer,
+  private constructor(
+    identifier: string,
+    peer: TorrentPeer,
+    seeder: TorrentSeeder,
+    name?: string,
+    options?: TorrentSeederParams,
   ) {
-    let name: string | undefined;
-    let options: TorrentFurrowParams | undefined;
-    let seeder: TorrentSeeder | undefined;
-    let rtc_client: TorrentPeer | undefined;
-
-    for (const arg of [arg1, arg2, arg3, arg4]) {
-      if (typeof arg === "string") name = arg;
-      else if (this.utils.is_peer(arg)) rtc_client = arg;
-      else if (this.utils.is_furrow_params(arg)) options = arg;
-      else if (this.utils.is_seeder(arg)) seeder = arg;
-    }
-
-    if (!seeder) throw new TorrentError("This furrow requires a seeder");
-    if (!rtc_client) throw new TorrentError("This furrow requires a peer");
-
-    this.name = name ?? this.utils.random_string();
-    this.options = options ?? {};
+    this.identifier = identifier;
+    this.peer = peer;
     this.seeder = seeder;
-    this.peer = rtc_client;
-    if (options?.exclusive && this.peers.size < 1)
-      this.peers.set(rtc_client.identifier, {
-        routing_key: rtc_client.identifier,
-        is_bound: false,
-      });
-
-    if (options?.auto_plant) this.plant();
-    if (options?.auto_bind) this.bind();
+    this.name = name ?? TorrentUtils.random_string();
+    this.options = options ?? {};
 
     this.peer.find(
       {
@@ -69,8 +47,46 @@ export class TorrentFurrow {
         name: this.name,
       },
     );
+  }
 
-    return this;
+  static create(
+    peer: TorrentPeer,
+    seeder: TorrentSeeder,
+    arg1?: string | TorrentFurrowParams,
+    arg2?: string | TorrentFurrowParams,
+  ): TorrentFurrow {
+    let name: string | undefined;
+    let options: TorrentSeederParams | undefined;
+
+    for (const arg of [arg1, arg2]) {
+      if (typeof arg === "string") name = arg;
+      else if (arg) options = arg;
+    }
+
+    const identifier = TorrentUtils.random_string();
+    const furrow = new TorrentFurrow(identifier, peer, seeder, name, options);
+
+    return furrow;
+  }
+
+  async send(
+    arg1?: TorrentMessageBody | TorrentMessageParams,
+    arg2?: TorrentMessageBody | TorrentMessageParams,
+  ) {
+    let body: TorrentMessageBody | undefined;
+    let params: TorrentMessageParams | undefined;
+
+    if (this.utils.is_message_params(arg1)) {
+      params = arg1;
+      if (arg2 !== undefined) body = arg2;
+    } else {
+      body = arg1;
+      if (this.utils.is_message_params(arg2)) params = arg2;
+    }
+
+    if (!this.peers) throw new TorrentError("Seeder requires a peer to send");
+    if (this.peers.size === 0) throw new TorrentError("No peers connected");
+    await this.seeder.send(body, params, this);
   }
 
   plant(
@@ -96,28 +112,7 @@ export class TorrentFurrow {
     this.is_planted = false;
   }
 
-  send(
-    arg1?: TorrentMessageBody | TorrentMessageParams,
-    arg2?: TorrentMessageBody | TorrentMessageParams,
-  ) {
-    let body: TorrentMessageBody | undefined;
-    let params: TorrentMessageParams | undefined;
-
-    if (this.utils.is_message_params(arg1)) {
-      params = arg1;
-      if (arg2 !== undefined) body = arg2;
-    } else {
-      body = arg1;
-      if (this.utils.is_message_params(arg2)) params = arg2;
-    }
-
-    if (!this.peers) throw new TorrentError("Seeder requires a peer to send");
-    if (this.peers.size === 0)
-      throw new TorrentError("Cannot send: no peers connected");
-    this.seeder.send(body, params, this);
-  }
-
-  bind(routing_key?: string) {
+  async bind(routing_key?: string) {
     this.peers.set(this.peer.identifier, {
       routing_key: routing_key ? routing_key : this.peer.identifier,
       is_bound: true,
@@ -127,6 +122,7 @@ export class TorrentFurrow {
       {
         id: this.seeder.identifier,
         name: this.seeder.name,
+        public_key: this.seeder.public_key,
       },
       {
         id: this.identifier,
