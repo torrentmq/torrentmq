@@ -445,7 +445,8 @@ export class TorrentPeer extends TorrentDHTNode {
 
     // send to ourselves???
     this._handle_receive(control);
-    this._broadcast_control(control);
+    // this is duplicate sending cause it also forwards the message
+    // this._broadcast_control(control);
   }
 
   private _handle_receive(
