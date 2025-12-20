@@ -424,10 +424,9 @@ export class TorrentPeer extends TorrentDHTNode {
     const signature = await seeder.identity?.sign(msg_bytes);
 
     const control: TorrentControlMessage = {
+      ...msg,
       type: "PUBLISH",
       control_id: TorrentUtils.random_string(),
-      from: msg.from,
-      to: msg.to,
       seeder: {
         id: seeder.identifier,
         name: seeder.name,
@@ -444,13 +443,14 @@ export class TorrentPeer extends TorrentDHTNode {
       },
     };
 
+    // send to ourselves???
+    this._handle_receive(control);
     this._broadcast_control(control);
   }
 
   private _handle_receive(
     msg: Extract<TorrentControlMessage, { type: "PUBLISH" }>,
   ) {
-    console.log(msg);
     // ignore if message from self
     if (msg.from === this.identifier) return;
 

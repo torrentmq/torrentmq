@@ -14,11 +14,13 @@ import { TorrentSeederProxy } from "./torrent-seeder-proxy";
 
 export class TorrentFurrowProxy {
   private readonly peer: TorrentPeer;
+  private binding_key: string | null = null;
 
   private seeder: TorrentSeederProxy;
   private furrow: TorrentFurrow | null = null;
   private utils: TorrentUtils = new TorrentUtils();
   private is_planted: boolean = false;
+  private is_bound: boolean = false;
   options: TorrentFurrowParams;
 
   name: string;
@@ -121,6 +123,8 @@ export class TorrentFurrowProxy {
       this.options = {};
     }
 
+    if (this.is_bound) this.bind(this.binding_key ?? undefined);
+
     this.name = furrow.name;
     this.identifier = furrow.identifier;
   }
@@ -150,6 +154,8 @@ export class TorrentFurrowProxy {
   }
 
   bind(routing_key?: string) {
+    this.is_bound = true;
+    if (routing_key) this.binding_key = routing_key;
     if (this.furrow) this.furrow.bind(routing_key);
     else
       this.peer.register_remote_binding(
@@ -167,6 +173,8 @@ export class TorrentFurrowProxy {
   }
 
   unbind(routing_key?: string) {
+    this.is_bound = false;
+    if (routing_key) this.binding_key = routing_key;
     if (this.furrow) this.unbind(routing_key);
     else
       this.peer.register_remote_binding(
