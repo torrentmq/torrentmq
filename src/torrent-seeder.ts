@@ -3,6 +3,7 @@ import { TorrentFurrow } from "./torrent-furrow";
 import { TorrentIdentity } from "./torrent-identity";
 import { TorrentMessage } from "./torrent-message";
 import { TorrentPeer } from "./torrent-peer";
+import { TorrentFurrowProxy } from "./torrent-proxies/torrent-furrow-proxy";
 import {
   TorrentFurrowParams,
   TorrentMessageBody,
@@ -14,7 +15,7 @@ import {
 import { TorrentUtils } from "./torrent-utils";
 
 export class TorrentSeeder extends TorrentEmitter<"CREATED_FURROW"> {
-  private furrows: TorrentFurrow[] = [];
+  furrows: TorrentFurrow[] = [];
   private utils: TorrentUtils = new TorrentUtils();
 
   private readonly peer: TorrentPeer;
@@ -40,11 +41,6 @@ export class TorrentSeeder extends TorrentEmitter<"CREATED_FURROW"> {
     this.public_key = public_key;
     this.name = name ?? TorrentUtils.random_string();
     this.options = options ?? {};
-
-    this.peer.find({
-      id: this.identifier,
-      name: this.name,
-    });
   }
 
   static async create(
@@ -79,17 +75,33 @@ export class TorrentSeeder extends TorrentEmitter<"CREATED_FURROW"> {
   }
 
   async send(
-    arg1?: TorrentMessageBody | TorrentMessageParams | TorrentFurrow,
-    arg2?: TorrentMessageBody | TorrentMessageParams | TorrentFurrow,
-    arg3?: TorrentMessageBody | TorrentMessageParams | TorrentFurrow,
+    arg1?:
+      | TorrentMessageBody
+      | TorrentMessageParams
+      | TorrentFurrow
+      | TorrentFurrowProxy,
+    arg2?:
+      | TorrentMessageBody
+      | TorrentMessageParams
+      | TorrentFurrow
+      | TorrentFurrowProxy,
+    arg3?:
+      | TorrentMessageBody
+      | TorrentMessageParams
+      | TorrentFurrow
+      | TorrentFurrowProxy,
   ) {
     let body: TorrentMessageBody | undefined;
     let params: TorrentMessageParams | undefined;
-    let furrow: TorrentFurrow | undefined;
+    let furrow: TorrentFurrow | TorrentFurrowProxy | undefined;
 
     for (const arg of [arg1, arg2, arg3]) {
       if (this.utils.is_message_params(arg)) params = arg;
-      else if (arg instanceof TorrentFurrow) furrow = arg;
+      else if (
+        arg instanceof TorrentFurrow ||
+        arg instanceof TorrentFurrowProxy
+      )
+        furrow = arg;
       else if (arg !== undefined) body = arg;
     }
 
@@ -158,42 +170,5 @@ export class TorrentSeeder extends TorrentEmitter<"CREATED_FURROW"> {
     });
 
     return furrow;
-  }
-
-  static async verify_message(message: {
-    seeder: {
-      id: string;
-      name: string;
-      public_key: JsonWebKey;
-    };
-    payload: TorrentMessage;
-    signature: string;
-  }): Promise<boolean> {
-    const public_key = await crypto.subtle.importKey(
-      "jwk",
-      message.seeder.public_key,
-      { name: "ECDSA", namedCurve: "P-256" },
-      true,
-      ["verify"],
-    );
-
-    const payload_bytes = TorrentUtils.to_array_buffer(message.payload.body);
-    const signature_bytes = TorrentUtils.from_base64_url(message.signature);
-
-    // is signature valid?
-    const valid_sig = await TorrentIdentity.verify(
-      payload_bytes,
-      signature_bytes,
-      public_key,
-    );
-
-    if (!valid_sig) return false;
-
-    // does seeder id(entifier) match public key?
-    const raw = await crypto.subtle.exportKey("raw", public_key);
-    const hash = await crypto.subtle.digest("SHA-256", raw);
-    const derived_id = TorrentUtils.to_base64_url(hash);
-
-    return derived_id === message.seeder.id;
   }
 }

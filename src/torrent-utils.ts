@@ -11,9 +11,10 @@ import {
 } from "./torrent-types";
 
 export class TorrentUtils {
-  constructor() {}
   private static encoder = new TextEncoder();
   private static decoder = new TextDecoder();
+
+  constructor() {}
 
   static random_string(minLength = 8, maxLength = 16) {
     const charset =
@@ -158,22 +159,5 @@ export class TorrentUtils {
       default:
         throw new Error(`Unsupported typeHint: ${typeHint}`);
     }
-  }
-
-  rendezvous_hash(key: string, nodes: string[], count = 1): string[] {
-    if (!nodes || nodes.length === 0) return [];
-    const scores = nodes.map((n) => {
-      // deterministic pseudo-random + key combination
-      const hashInput = `${n}:${key}`;
-      // simple 32-bit hash (FNV-1a variant)
-      let h = 2166136261 >>> 0;
-      for (let i = 0; i < hashInput.length; i++) {
-        h ^= hashInput.charCodeAt(i);
-        h = (h * 16777619) >>> 0;
-      }
-      return { node: n, score: h };
-    });
-    scores.sort((a, b) => b.score - a.score); // high to low
-    return scores.slice(0, Math.min(count, scores.length)).map((s) => s.node);
   }
 }

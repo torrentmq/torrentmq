@@ -2,7 +2,6 @@ import { TorrentUtils } from "./torrent-utils";
 import { TorrentError } from "./torrent-error";
 import { TorrentDHTNode } from "./torrent-dht";
 import { TorrentMessage } from "./torrent-message";
-import { TorrentSeeder } from "./torrent-seeder";
 import {
   TorrentControlMessage,
   TorrentMessageObject,
@@ -15,11 +14,12 @@ import {
   TorrentSeederBindingObj,
   TorrentFurrowBindingObj,
 } from "./torrent-types";
+import { TorrentSeederProxy } from "./torrent-proxies/torrent-seeder-proxy";
 
 export class TorrentPeer extends TorrentDHTNode {
   // the hosted seeders and or furrows [seeeder_name] -> [furrow_name][]
   private hosted: TorrentBrokerHost = new Map();
-  private seeders: TorrentSeeder[] = [];
+  private seeders: TorrentSeederProxy[] = [];
   private is_connected: boolean = false;
 
   readonly max_hosting_size: number = 8;
@@ -71,7 +71,7 @@ export class TorrentPeer extends TorrentDHTNode {
       if (typeof arg2 === "string") name = arg2;
     }
 
-    const seeder = await TorrentSeeder.create(this, name, options);
+    const seeder = await TorrentSeederProxy.create(this, name, options);
     this.seeders.push(seeder);
 
     this._add_to_hosted({
@@ -158,6 +158,32 @@ export class TorrentPeer extends TorrentDHTNode {
 
     // send to all connected peers via datachannels if available
     this._handle_publish(control);
+  }
+
+  submit(msg: {
+    seeder: TorrentControlSeederOrFurrow;
+    furrow?: TorrentControlSeederOrFurrow;
+    message?: TorrentMessage;
+  }) {
+    const publish_msg: TorrentMessageObject = {
+      body: msg.message?.body,
+      properties: msg.message?.properties,
+    };
+
+    const control: TorrentControlMessage = {
+      type: "SUBMIT",
+      control_id: TorrentUtils.random_string(),
+      from: this.identifier,
+      seeder: msg.seeder,
+      furrow: msg?.furrow,
+      message: publish_msg,
+    };
+
+    // send to peer that hosts the seeder/furrow
+    // hosted seeder will sign and re-broadcast the message
+    // just return a publish
+    this._broadcast_control(control);
+    this.emit("PUBLISH", msg);
   }
 
   find(
@@ -326,6 +352,11 @@ export class TorrentPeer extends TorrentDHTNode {
         break;
       }
 
+      case "SUBMIT": {
+        this._handle_submit(control);
+        break;
+      }
+
       case "PUBLISH": {
         this._handle_receive(control);
         break;
@@ -366,9 +397,60 @@ export class TorrentPeer extends TorrentDHTNode {
     this.emit("PUBLISH", msg);
   }
 
+  private async _handle_submit(
+    msg: Extract<TorrentControlMessage, { type: "SUBMIT" }>,
+  ) {
+    if (msg.from === this.identifier) return;
+    const seeder = this.seeders.find((s) => s.identifier === msg.seeder.id);
+
+    if (!seeder) return;
+    if (!seeder.identity) return;
+
+    // bug on furrows due to furrow method on torrent seeder (proxy)?????
+    // ids do not match cause it doesnt swap over
+    if (
+      msg.furrow &&
+      !seeder.furrows.find((f) => f?.identifier === msg.furrow?.id)
+    )
+      return;
+
+    const message = new TorrentMessage(
+      msg.message?.body || null,
+      msg.message?.properties,
+    );
+    const msg_bytes = await seeder.identity?.sign(
+      TorrentUtils.to_array_buffer(message.body),
+    );
+    const signature = await seeder.identity?.sign(msg_bytes);
+
+    const control: TorrentControlMessage = {
+      type: "PUBLISH",
+      control_id: TorrentUtils.random_string(),
+      from: msg.from,
+      to: msg.to,
+      seeder: {
+        id: seeder.identifier,
+        name: seeder.name,
+        public_key: seeder.public_key,
+      },
+      furrow: msg?.furrow,
+      message: {
+        body: msg.message?.body,
+        properties: msg.message?.properties,
+      },
+      artifacts: {
+        signature: TorrentUtils.to_base64_url(signature),
+        timestamp: Date.now(),
+      },
+    };
+
+    this._broadcast_control(control);
+  }
+
   private _handle_receive(
     msg: Extract<TorrentControlMessage, { type: "PUBLISH" }>,
   ) {
+    console.log(msg);
     // ignore if message from self
     if (msg.from === this.identifier) return;
 

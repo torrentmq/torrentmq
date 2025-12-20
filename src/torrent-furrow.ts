@@ -1,4 +1,3 @@
-import { TorrentError } from "./torrent-error";
 import { TorrentPeer } from "./torrent-peer";
 import { TorrentSeeder } from "./torrent-seeder";
 import {
@@ -12,14 +11,12 @@ import {
 import { TorrentUtils } from "./torrent-utils";
 
 export class TorrentFurrow {
-  private peers: Map<string, { routing_key: string; is_bound: boolean }> =
-    new Map();
   private utils: TorrentUtils = new TorrentUtils();
   private is_planted: boolean = false;
 
   private readonly peer: TorrentPeer;
-  private readonly seeder: TorrentSeeder;
 
+  readonly seeder: TorrentSeeder;
   readonly identifier: string;
   readonly name: string;
   readonly options: TorrentFurrowParams;
@@ -36,17 +33,6 @@ export class TorrentFurrow {
     this.seeder = seeder;
     this.name = name ?? TorrentUtils.random_string();
     this.options = options ?? {};
-
-    this.peer.find(
-      {
-        id: this.seeder.identifier,
-        name: this.seeder.name,
-      },
-      {
-        id: this.identifier,
-        name: this.name,
-      },
-    );
   }
 
   static create(
@@ -56,7 +42,7 @@ export class TorrentFurrow {
     arg2?: string | TorrentFurrowParams,
   ): TorrentFurrow {
     let name: string | undefined;
-    let options: TorrentSeederParams | undefined;
+    let options: TorrentFurrowParams | undefined;
 
     for (const arg of [arg1, arg2]) {
       if (typeof arg === "string") name = arg;
@@ -84,8 +70,6 @@ export class TorrentFurrow {
       if (this.utils.is_message_params(arg2)) params = arg2;
     }
 
-    if (!this.peers) throw new TorrentError("Seeder requires a peer to send");
-    if (this.peers.size === 0) throw new TorrentError("No peers connected");
     await this.seeder.send(body, params, this);
   }
 
@@ -112,12 +96,7 @@ export class TorrentFurrow {
     this.is_planted = false;
   }
 
-  async bind(routing_key?: string) {
-    this.peers.set(this.peer.identifier, {
-      routing_key: routing_key ? routing_key : this.peer.identifier,
-      is_bound: true,
-    });
-
+  bind(routing_key?: string) {
     this.peer.register_remote_binding(
       {
         id: this.seeder.identifier,
@@ -132,13 +111,18 @@ export class TorrentFurrow {
     );
   }
 
-  unbind() {
-    const data = this.peers.get(this.peer.identifier);
-    if (!data) return;
-
-    this.peers.set(this.peer.identifier, {
-      ...data,
-      is_bound: false,
-    });
+  unbind(routing_key?: string) {
+    this.peer.unregister_remote_binding(
+      {
+        id: this.seeder.identifier,
+        name: this.seeder.name,
+        public_key: this.seeder.public_key,
+      },
+      {
+        id: this.identifier,
+        name: this.name,
+        routing_key,
+      },
+    );
   }
 }

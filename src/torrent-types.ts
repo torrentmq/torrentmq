@@ -110,9 +110,19 @@ export type TorrentControlMessage =
         signature: string;
       };
     })
+  | (TorrentControlPeerInfo & {
+      type: "SUBMIT";
+      message?: TorrentMessageObject;
+      seeder: TorrentControlSeederOrFurrow;
+    })
   | (TorrentControlPeerInfo & { type: "ACK"; message_id: string })
   | (TorrentControlPeerInfo & { type: "FIND" })
   | (TorrentControlPeerInfo & { type: "NOT_FOUND" })
+  | (TorrentControlPeerInfo & {
+      type: "CREATE_FURROW_ON_HOST";
+      furrow: { name: string };
+    })
+  | (TorrentControlPeerInfo & { type: "FURROW_CREATED_ON_HOST" })
   | {
       control_id: string;
       from: string;
@@ -195,6 +205,9 @@ export type TorrentPeerEntry = {
     quality?: TorrentPeerQuality;
   };
 };
+
+// PLEASE DO NOT TOUCH
+// IT IS A MIRACLE THAT IT WORKS
 
 type TorrentBrand<K, T> = K & { readonly __brand: T };
 
