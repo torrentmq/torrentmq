@@ -211,52 +211,25 @@ export type TorrentPeerEntry = {
 
 type TorrentBrand<K, T> = K & { readonly __brand: T };
 
-export type TorrentSeederKey = TorrentBrand<string, "SeederKey">;
-export type TorrentFurrowKey = TorrentBrand<string, "FurrowKey">;
+export type TorrentSeederBindingBrand = TorrentBrand<string, "SeederKey">;
+export type TorrentFurrowBindingBrand = TorrentBrand<string, "FurrowKey">;
 
 export type TorrentSeederBindingObj = {
-  seeder_id: string;
+  s_id: string;
   name: string;
   public_key?: JsonWebKey;
 };
 
 export type TorrentFurrowBindingObj = {
-  furrow_id: string;
+  f_id: string;
   name: string;
   routing_key: string;
 };
 
 // map [seeder_id, seeder_name, seeder_publick_key] -> [furrow_id, furrow_name, routing_key][]
 export type TorrentBrokerBindings = Map<
-  TorrentSeederKey,
-  Set<TorrentFurrowKey>
->;
-
-export type TorrentBindingObj =
-  | TorrentSeederBindingObj
-  | TorrentFurrowBindingObj;
-// Union type of all keys
-export type TorrentBindingKey = TorrentSeederKey | TorrentFurrowKey;
-
-// Helper type to map tuple -> key
-export type TorrentBindingKeyOf<T extends TorrentBindingObj> =
-  T extends TorrentSeederBindingObj
-    ? TorrentSeederKey
-    : T extends TorrentFurrowBindingObj
-      ? TorrentFurrowKey
-      : never;
-
-// Helper type to map key -> tuple
-export type TorrentBindingTupleOf<K extends TorrentBindingKey> =
-  K extends TorrentSeederKey
-    ? TorrentSeederBindingObj
-    : K extends TorrentFurrowKey
-      ? TorrentFurrowBindingObj
-      : never;
-
-export type TorrentBrokerHost = Map<
-  TorrentSeederHostedBrand,
-  Set<TorrentFurrowHostedBrand>
+  TorrentSeederBindingBrand,
+  Set<TorrentFurrowBindingBrand>
 >;
 
 export type TorrentSeederHostedBrand = TorrentBrand<string, "SeederHostedObj">;
@@ -265,51 +238,54 @@ export type TorrentFurrowHostedBrand = TorrentBrand<string, "FurrowHostedObj">;
 // distinguish seeder and furrow `name` to avoid branding issues
 export type TorrentSeederHostedObj = {
   id: string;
-  seeder_name: string;
+  s_name: string;
   public_key: JsonWebKey;
   properties?: TorrentSeederParams;
 };
+
 export type TorrentFurrowHostedObj = {
   id: string;
-  furrow_name: string;
+  f_name: string;
   properties?: TorrentFurrowParams;
 };
 
-export type TorrentHostedObj = TorrentSeederHostedObj | TorrentFurrowHostedObj;
-export type TorrentHostedKey =
+export type TorrentBrokerHost = Map<
+  TorrentSeederHostedBrand,
+  Set<TorrentFurrowHostedBrand>
+>;
+
+export type TorrentSerializableObj =
+  | TorrentFurrowHostedObj
+  | TorrentSeederHostedObj
+  | TorrentFurrowBindingObj
+  | TorrentSeederBindingObj;
+
+export type TorrentDeserializableKey =
+  | TorrentFurrowHostedBrand
   | TorrentSeederHostedBrand
-  | TorrentFurrowHostedBrand;
+  | TorrentFurrowBindingBrand
+  | TorrentSeederBindingBrand;
 
-export type TorrentHostedKeyOf<T extends TorrentHostedObj> =
-  T extends TorrentSeederHostedObj
-    ? TorrentSeederHostedBrand
-    : T extends TorrentFurrowHostedObj
-      ? TorrentFurrowHostedBrand
-      : never;
+// deserialization mapping
+export type TorrentDeserializeObjOf<K extends TorrentDeserializableKey> =
+  K extends TorrentSeederBindingBrand
+    ? TorrentSeederBindingObj
+    : K extends TorrentFurrowBindingBrand
+      ? TorrentFurrowBindingObj
+      : K extends TorrentSeederHostedBrand
+        ? TorrentSeederHostedObj
+        : K extends TorrentFurrowHostedBrand
+          ? TorrentFurrowHostedObj
+          : never;
 
-export type TorrentHostedObjOf<K extends TorrentHostedKey> =
-  K extends TorrentSeederHostedBrand
-    ? TorrentSeederHostedObj
-    : K extends TorrentFurrowHostedBrand
-      ? TorrentFurrowHostedObj
-      : never;
-
-export type TorrentSerializeKeyOf<T> = T extends TorrentBindingObj
-  ? TorrentBindingKeyOf<T>
-  : T extends TorrentHostedObj
-    ? TorrentHostedKeyOf<T>
-    : never;
-
-export type TorrentDeserializeObjOf<K> = K extends TorrentBindingKey
-  ? TorrentBindingTupleOf<K>
-  : K extends TorrentHostedKey
-    ? TorrentHostedObjOf<K>
-    : never;
-
-export type RequireAtLeastOne<T, Keys extends keyof T = keyof T> = Pick<
-  T,
-  Exclude<keyof T, Keys>
-> &
-  {
-    [K in Keys]-?: Required<Pick<T, K>> & Partial<Pick<T, Exclude<Keys, K>>>;
-  }[Keys];
+// serialization mapping
+export type TorrentSerializeKeyOf<T extends TorrentSerializableObj> =
+  T extends TorrentSeederBindingObj
+    ? TorrentSeederBindingBrand
+    : T extends TorrentFurrowBindingObj
+      ? TorrentFurrowBindingBrand
+      : T extends TorrentSeederHostedObj
+        ? TorrentSeederHostedBrand
+        : T extends TorrentFurrowHostedObj
+          ? TorrentFurrowHostedBrand
+          : never;

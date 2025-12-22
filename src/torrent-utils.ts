@@ -1,13 +1,13 @@
 import {
-  TorrentBindingKey,
-  TorrentBindingObj,
-  TorrentFurrowParams,
-  TorrentHostedKey,
-  TorrentHostedObj,
-  TorrentMessageParams,
+  TorrentDeserializableKey,
   TorrentDeserializeObjOf,
-  TorrentSerializeKeyOf,
+  TorrentFurrowParams,
+  TorrentMessageBody,
+  TorrentMessageParams,
+  TorrentPeerQuality,
   TorrentSeederParams,
+  TorrentSerializableObj,
+  TorrentSerializeKeyOf,
 } from "./torrent-types";
 
 export class TorrentUtils {
@@ -66,13 +66,13 @@ export class TorrentUtils {
     );
   }
 
-  serialize<T extends TorrentBindingObj | TorrentHostedObj>(
+  serialize<T extends TorrentSerializableObj>(
     value: T,
   ): TorrentSerializeKeyOf<T> {
     return JSON.stringify(value) as TorrentSerializeKeyOf<T>;
   }
 
-  deserialize<K extends TorrentBindingKey | TorrentHostedKey>(
+  deserialize<K extends TorrentDeserializableKey>(
     value: K,
   ): TorrentDeserializeObjOf<K> {
     return JSON.parse(value) as TorrentDeserializeObjOf<K>;
@@ -158,6 +158,44 @@ export class TorrentUtils {
         return JSON.parse(str);
       default:
         throw new Error(`Unsupported typeHint: ${typeHint}`);
+    }
+  }
+
+  static _get_quality(metrics: {
+    plr: number;
+    rtt: number;
+    jitter: number;
+  }): TorrentPeerQuality {
+    const { plr, rtt, jitter } = metrics;
+
+    if (rtt < 0.08 && plr < 0.01 && jitter < 0.005) return "EXCELLENT";
+    else if (rtt < 0.2 && plr < 0.03 && jitter < 0.015) return "GOOD";
+    else if (rtt < 0.5 && plr < 0.08 && jitter < 0.03) return "FAIR";
+    else if (rtt < 1.5 && plr < 0.2 && jitter < 0.1) return "POOR";
+    else if (rtt >= 1.5 || plr >= 0.2 || jitter >= 0.1) return "BAD";
+    else return "DEAD";
+  }
+
+  static _compute_body_size(body: TorrentMessageBody): number {
+    if (body === null) return 0;
+
+    if (body instanceof Uint8Array) {
+      return body.byteLength;
+    }
+
+    switch (typeof body) {
+      case "string":
+        return this.encoder.encode(body).byteLength;
+
+      case "number":
+      case "boolean":
+        return this.encoder.encode(String(body)).byteLength;
+
+      case "object":
+        return this.encoder.encode(JSON.stringify(body)).byteLength;
+
+      default:
+        return 0;
     }
   }
 }

@@ -6,7 +6,6 @@ import {
   TorrentControlMessage,
   TorrentEventName,
   TorrentPeerEntry,
-  TorrentPeerQuality,
   TorrentSignalMessage,
 } from "./torrent-types";
 import { TorrentUtils } from "./torrent-utils";
@@ -283,7 +282,7 @@ export class TorrentDHTNode extends TorrentEmitter<
           control_id: TorrentUtils.random_string(),
           from: this.identifier,
           seeder: {
-            id: deserialized_seeder.seeder_id,
+            id: deserialized_seeder.s_id,
             name: deserialized_seeder.name,
           },
         };
@@ -295,7 +294,7 @@ export class TorrentDHTNode extends TorrentEmitter<
             const announce_with_furrow: TorrentControlMessage = {
               ...announce,
               furrow: {
-                id: deserialized_furrow.furrow_id,
+                id: deserialized_furrow.f_id,
                 name: deserialized_furrow.name,
                 routing_key: deserialized_furrow.routing_key,
               },
@@ -670,19 +669,11 @@ export class TorrentDHTNode extends TorrentEmitter<
       jitter * 1000 +
       1 / (available_outgoing_bitrate + 1);
 
-    function _get_quality(): TorrentPeerQuality {
-      if (rtt < 0.08 && packet_loss_ratio < 0.01 && jitter < 0.005)
-        return "EXCELLENT";
-      else if (rtt < 0.2 && packet_loss_ratio < 0.03 && jitter < 0.015)
-        return "GOOD";
-      else if (rtt < 0.5 && packet_loss_ratio < 0.08 && jitter < 0.03)
-        return "FAIR";
-      else if (rtt < 1.5 && packet_loss_ratio < 0.2 && jitter < 0.1)
-        return "POOR";
-      else if (rtt >= 1.5 || packet_loss_ratio >= 0.2 || jitter >= 0.1)
-        return "BAD";
-      else return "DEAD";
-    }
+    const quality = TorrentUtils._get_quality({
+      plr: packet_loss_ratio,
+      jitter,
+      rtt,
+    });
 
     return {
       cost,
@@ -690,7 +681,7 @@ export class TorrentDHTNode extends TorrentEmitter<
       plr: packet_loss_ratio,
       jitter,
       aob: available_outgoing_bitrate,
-      quality: _get_quality(),
+      quality,
     };
   }
 

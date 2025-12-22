@@ -76,7 +76,7 @@ export class TorrentPeer extends TorrentDHTNode {
 
     this._add_to_hosted({
       id: seeder.identifier,
-      seeder_name: seeder.name,
+      s_name: seeder.name,
       public_key: seeder.public_key,
       ...(options && Object.keys(options).length > 0
         ? { properties: { ...options } }
@@ -205,16 +205,16 @@ export class TorrentPeer extends TorrentDHTNode {
     seeder: TorrentSeederHostedObj,
     furrow?: TorrentFurrowHostedObj,
   ) {
-    let s_value = this.hosted.get(this.utils.serialize(seeder));
+    const serialized_seeder = this.utils.serialize(seeder);
+    let s_value = this.hosted.get(serialized_seeder);
 
     if (!s_value) {
       s_value = new Set();
-      this.hosted.set(this.utils.serialize(seeder), s_value);
+      this.hosted.set(serialized_seeder, s_value);
     }
 
     if (furrow) {
-      const serialized_furrow =
-        this.utils.serialize<TorrentFurrowHostedObj>(furrow);
+      const serialized_furrow = this.utils.serialize(furrow);
 
       if (!s_value.has(serialized_furrow)) s_value.add(serialized_furrow);
     }
@@ -226,7 +226,7 @@ export class TorrentPeer extends TorrentDHTNode {
       const seeder_deserialized = this.utils.deserialize(seeder_item);
 
       if (
-        seeder_deserialized.seeder_name.trim() === seeder.trim() ||
+        seeder_deserialized.s_name.trim() === seeder.trim() ||
         seeder_deserialized.id.trim() === seeder.trim()
       ) {
         if (furrow)
@@ -234,7 +234,7 @@ export class TorrentPeer extends TorrentDHTNode {
             const furrow_deserialized = this.utils.deserialize(furrow_item);
 
             if (
-              furrow_deserialized.furrow_name.trim() === furrow.trim() ||
+              furrow_deserialized.f_name.trim() === furrow.trim() ||
               furrow_deserialized.id.trim() === furrow.trim()
             )
               furrow_set.delete(furrow_item);
@@ -290,7 +290,7 @@ export class TorrentPeer extends TorrentDHTNode {
       case "ANNOUNCE_BIND": {
         if (!peer?.bb) break;
         const seeder_key: TorrentSeederBindingObj = {
-          seeder_id: control.seeder.id,
+          s_id: control.seeder.id,
           name: control.seeder.name,
         };
         let furrow_set = peer.bb.get(this.utils.serialize(seeder_key));
@@ -304,7 +304,7 @@ export class TorrentPeer extends TorrentDHTNode {
         // If a furrow is provided, add the furrow to the set for this seeder
         if (control.furrow?.id && control.furrow?.name) {
           const furrow_key: TorrentFurrowBindingObj = {
-            furrow_id: control.furrow.id,
+            f_id: control.furrow.id,
             name: control.furrow.name,
             routing_key:
               control.furrow.routing_key ?? from_peer_id ?? control.from,
@@ -323,7 +323,7 @@ export class TorrentPeer extends TorrentDHTNode {
       case "ANNOUNCE_UNBIND": {
         if (!peer?.bb) break;
         const seeder_key: TorrentSeederBindingObj = {
-          seeder_id: control.seeder.id,
+          s_id: control.seeder.id,
           name: control.seeder.name,
         };
         let furrow_set = peer.bb.get(this.utils.serialize(seeder_key));
@@ -331,7 +331,7 @@ export class TorrentPeer extends TorrentDHTNode {
         if (!furrow_set && control.furrow) break;
         if (control.furrow?.id && control.furrow?.name) {
           const furrow_key: TorrentFurrowBindingObj = {
-            furrow_id: control.furrow.id,
+            f_id: control.furrow.id,
             name: control.furrow.name,
             routing_key:
               control.furrow.routing_key ?? from_peer_id ?? control.from,
@@ -518,7 +518,7 @@ export class TorrentPeer extends TorrentDHTNode {
     msg: Extract<TorrentControlMessage, { type: "FOUND" }>,
   ) {
     const { seeder, furrow } = msg;
-    const seeder_name = seeder.seeder_name;
+    const seeder_name = seeder.s_name;
 
     this.emit("FOUND", {
       seeder,
@@ -530,12 +530,9 @@ export class TorrentPeer extends TorrentDHTNode {
     // messages should not be should not be routed using it
     this.seeders = this.seeders.filter((s) => s.name !== seeder_name);
 
-    this._remove_from_hosted(seeder_name, furrow?.furrow_name);
+    this._remove_from_hosted(seeder_name, furrow?.f_name);
 
-    const binding = this._search_broker_bindings(
-      seeder_name,
-      furrow?.furrow_name,
-    );
+    const binding = this._search_broker_bindings(seeder_name, furrow?.f_name);
 
     if (!binding.seeder) return;
 
@@ -559,7 +556,7 @@ export class TorrentPeer extends TorrentDHTNode {
       },
       {
         id: furrow.id,
-        name: furrow.furrow_name,
+        name: furrow.f_name,
         routing_key: binding.furrow.routing_key,
       },
     );
@@ -574,12 +571,12 @@ export class TorrentPeer extends TorrentDHTNode {
       const deserialized_seeder = this.utils.deserialize(seeder_entry);
 
       if (
-        deserialized_seeder.seeder_id !== seeder &&
+        deserialized_seeder.s_id !== seeder &&
         deserialized_seeder.name !== seeder
       )
         continue;
       obj.seeder = {
-        id: deserialized_seeder.seeder_id,
+        id: deserialized_seeder.s_id,
         name: deserialized_seeder.name,
         ...(deserialized_seeder.public_key
           ? { public_key: deserialized_seeder.public_key }
@@ -591,10 +588,10 @@ export class TorrentPeer extends TorrentDHTNode {
           const deserialized_furrow = this.utils.deserialize(furrow_entry);
           if (
             deserialized_furrow.name === furrow ||
-            deserialized_furrow.furrow_id === furrow
+            deserialized_furrow.f_id === furrow
           ) {
             obj.furrow = {
-              id: deserialized_furrow.furrow_id,
+              id: deserialized_furrow.f_id,
               name: deserialized_furrow.name,
               routing_key: deserialized_furrow.routing_key,
             };
@@ -620,7 +617,7 @@ export class TorrentPeer extends TorrentDHTNode {
     for (const [seeder_entry, furrow_set] of this.hosted) {
       const real_seeder = this.utils.deserialize(seeder_entry);
 
-      if (real_seeder.seeder_name !== control.seeder.name) continue;
+      if (real_seeder.s_name !== control.seeder.name) continue;
       fnd_msg.seeder = real_seeder;
 
       if (control.furrow) {
@@ -628,7 +625,7 @@ export class TorrentPeer extends TorrentDHTNode {
 
         for (const furrow_entry of furrow_set) {
           const real_furrow = this.utils.deserialize(furrow_entry);
-          if (real_furrow.furrow_name !== req_furrow_name) continue;
+          if (real_furrow.f_name !== req_furrow_name) continue;
           fnd_msg.furrow = real_furrow;
         }
       }
@@ -653,7 +650,7 @@ export class TorrentPeer extends TorrentDHTNode {
     furrow?: TorrentControlBindFurrow,
   ) {
     const seeder_key: TorrentSeederBindingObj = {
-      seeder_id: seeder.id,
+      s_id: seeder.id,
       name: seeder.name,
       public_key: seeder.public_key,
     };
@@ -666,7 +663,7 @@ export class TorrentPeer extends TorrentDHTNode {
 
     if (furrow?.id && furrow?.name) {
       const furrow_key: TorrentFurrowBindingObj = {
-        furrow_id: furrow.id,
+        f_id: furrow.id,
         name: furrow.name,
         routing_key: furrow.routing_key ?? this.identifier,
       };
@@ -679,7 +676,7 @@ export class TorrentPeer extends TorrentDHTNode {
     furrow?: TorrentControlBindFurrow,
   ) {
     const seeder_key: TorrentSeederBindingObj = {
-      seeder_id: seeder.id,
+      s_id: seeder.id,
       name: seeder.name,
       public_key: seeder.public_key,
     };
@@ -688,7 +685,7 @@ export class TorrentPeer extends TorrentDHTNode {
     if (!furrow_set && furrow) return;
     if (furrow?.id && furrow?.name) {
       const furrow_key: TorrentFurrowBindingObj = {
-        furrow_id: furrow.id,
+        f_id: furrow.id,
         name: furrow.name,
         routing_key: furrow.routing_key ?? this.identifier,
       };
