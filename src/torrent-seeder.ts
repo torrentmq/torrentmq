@@ -154,7 +154,7 @@ export class TorrentSeeder extends TorrentEmitter<"CREATED_FURROW"> {
     }>("CREATED_FURROW", {
       seeder: {
         id: this.identifier,
-        seeder_name: this.name,
+        s_name: this.name,
         public_key: this.public_key,
         ...(this.options && Object.keys(this.options).length > 0
           ? { properties: { ...this.options } }
@@ -162,7 +162,7 @@ export class TorrentSeeder extends TorrentEmitter<"CREATED_FURROW"> {
       },
       furrow: {
         id: furrow.identifier,
-        furrow_name: furrow.name,
+        f_name: furrow.name,
         ...(furrow.options && Object.keys(furrow.options).length > 0
           ? { properties: { ...furrow.options } }
           : {}),

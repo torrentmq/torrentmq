@@ -57,11 +57,11 @@ export class TorrentFurrowProxy {
       if (
         data.furrow &&
         data.seeder.id === this.seeder.identifier && // checks if the seeder id is right
-        this.name === data.furrow?.furrow_name // check if the furrow name is the same
+        this.name === data.furrow?.f_name // check if the furrow name is the same
       )
         this._set_host({
           identifier: data.furrow.id,
-          name: data.furrow.furrow_name,
+          name: data.furrow.f_name,
         });
     });
   }

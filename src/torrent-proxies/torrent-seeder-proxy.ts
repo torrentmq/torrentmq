@@ -52,7 +52,7 @@ export class TorrentSeederProxy extends TorrentEmitter<"CREATED_FURROW"> {
     }>("FOUND", (data) => {
       this._set_host({
         identifier: data.seeder.id,
-        name: data.seeder.seeder_name,
+        name: data.seeder.s_name,
         public_key: data.seeder.public_key,
       });
     });
@@ -103,7 +103,7 @@ export class TorrentSeederProxy extends TorrentEmitter<"CREATED_FURROW"> {
     }>("CREATED_FURROW", {
       seeder: {
         id: this.identifier,
-        seeder_name: this.name,
+        s_name: this.name,
         public_key: this.public_key,
         ...(this.options && Object.keys(this.options).length > 0
           ? { properties: { ...this.options } }
@@ -111,7 +111,7 @@ export class TorrentSeederProxy extends TorrentEmitter<"CREATED_FURROW"> {
       },
       furrow: {
         id: furrow_proxy.identifier,
-        furrow_name: furrow_proxy.name,
+        f_name: furrow_proxy.name,
         ...(furrow_proxy.options && Object.keys(furrow_proxy.options).length > 0
           ? { properties: { ...furrow_proxy.options } }
           : {}),
