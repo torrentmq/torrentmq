@@ -22,7 +22,7 @@ export class TorrentIdentity {
     return new TorrentIdentity(key_pair.publicKey, key_pair.privateKey);
   }
 
-  // thhis is to import keys
+  // this is to import keys
   // avoids creating new ones and uses the same idenity
   static async from_jwk(public_jwk: JsonWebKey, private_jwk: JsonWebKey) {
     const public_key = await crypto.subtle.importKey(
@@ -69,13 +69,34 @@ export class TorrentIdentity {
   static async verify(
     data: ArrayBuffer,
     signature: ArrayBuffer,
-    public_key: CryptoKey,
+    public_key: CryptoKey | JsonWebKey,
   ): Promise<boolean> {
+    const key =
+      public_key instanceof CryptoKey
+        ? public_key
+        : await crypto.subtle.importKey(
+            "jwk",
+            public_key,
+            { name: "ECDSA", namedCurve: "P-256" },
+            true,
+            ["verify"],
+          );
+
     return crypto.subtle.verify(
       { name: "ECDSA", hash: "SHA-256" },
-      public_key,
+      key,
       signature,
       data,
+    );
+  }
+
+  static async jwk_to_crypto(jwk_key: JsonWebKey): Promise<CryptoKey> {
+    return crypto.subtle.importKey(
+      "jwk",
+      jwk_key,
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      ["verify"],
     );
   }
 }

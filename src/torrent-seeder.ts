@@ -3,130 +3,150 @@ import { TorrentFurrow } from "./torrent-furrow";
 import { TorrentIdentity } from "./torrent-identity";
 import { TorrentMessage } from "./torrent-message";
 import { TorrentPeer } from "./torrent-peer";
-import { TorrentFurrowProxy } from "./torrent-proxies/torrent-furrow-proxy";
 import {
   TorrentFurrowParams,
   TorrentMessageBody,
   TorrentMessageParams,
   TorrentSeederParams,
-  TorrentFurrowHostedObj,
-  TorrentSeederHostedObj,
+  TorrentHostedObj,
+  TorrentSeederCertificate,
 } from "./torrent-types";
 import { TorrentUtils } from "./torrent-utils";
 
-export class TorrentSeeder extends TorrentEmitter<"CREATED_FURROW"> {
-  furrows: TorrentFurrow[] = [];
-  private utils: TorrentUtils = new TorrentUtils();
+export class TorrentSeeder extends TorrentEmitter<
+  "initialized" | "created_furrow"
+> {
+  identifier: string;
+  readonly peer: TorrentPeer;
 
-  private readonly peer: TorrentPeer;
-  readonly identity: TorrentIdentity;
-  readonly identifier: string;
-  readonly public_key: JsonWebKey;
+  furrows: TorrentFurrow[] = [];
+
+  pub_key: JsonWebKey;
+  cert?: TorrentSeederCertificate;
+  is_root: boolean = true;
+
+  identity: TorrentIdentity;
+  swarm_key: ArrayBuffer;
+
   readonly name: string;
   readonly options: TorrentSeederParams;
 
-  private constructor(
-    identity: TorrentIdentity,
-    identifier: string,
+  constructor(
     peer: TorrentPeer,
-    public_key: JsonWebKey,
-    name?: string,
-    options?: TorrentSeederParams,
+    arg1?: string | TorrentSeederParams,
+    arg2?: string | TorrentSeederParams,
   ) {
     super();
 
-    this.identity = identity;
-    this.identifier = identifier;
-    this.peer = peer;
-    this.public_key = public_key;
-    this.name = name ?? TorrentUtils.random_string();
-    this.options = options ?? {};
-  }
-
-  static async create(
-    peer: TorrentPeer,
-    arg1?: string | TorrentSeederParams | TorrentIdentity,
-    arg2?: string | TorrentSeederParams | TorrentIdentity,
-    arg3?: string | TorrentSeederParams | TorrentIdentity,
-  ): Promise<TorrentSeeder> {
     let name: string | undefined;
     let options: TorrentSeederParams | undefined;
-    let identity: TorrentIdentity | undefined;
 
-    for (const arg of [arg1, arg2, arg3]) {
+    for (const arg of [arg1, arg2]) {
       if (typeof arg === "string") name = arg;
-      else if (arg instanceof TorrentIdentity) identity = arg;
       else if (arg) options = arg;
     }
 
-    // generate identity if none supplied
-    identity ??= await TorrentIdentity.create();
-    const identifier = await identity.get_identifier();
-    const seeder = new TorrentSeeder(
-      identity,
-      identifier,
-      peer,
-      await identity.export_public_jwk(),
-      name,
-      options,
-    );
+    this.peer = peer;
+    this.name = name ?? TorrentUtils.random_string();
+    this.options = options ?? {};
 
-    return seeder;
+    // assign identity for message signing and verification
+    TorrentIdentity.create().then((identity) => {
+      this.identity = identity;
+      identity.get_identifier().then((id) => {
+        this.identifier = id;
+
+        identity.export_public_jwk().then((jwk) => {
+          this.pub_key = jwk;
+
+          TorrentUtils._generate_swarm_key().then((key) => {
+            this.swarm_key = key;
+
+            this.peer.find({
+              id,
+              name: this.name,
+            });
+
+            this.emit("initialized");
+          });
+        });
+      });
+    });
+
+    this.peer.on<{
+      seeder: TorrentHostedObj & { swarm_key: ArrayBuffer };
+      furrow?: TorrentHostedObj & { swarm_key: ArrayBuffer };
+      peer_id: string;
+    }>("swarm_key_exchanged", (data) => {
+      if (data.seeder.name !== this.name) return;
+      this.identifier = data.seeder.id;
+      this.swarm_key = data.seeder.swarm_key;
+      this.is_root = false;
+    });
+
+    return this;
   }
 
-  async send(
-    arg1?:
-      | TorrentMessageBody
-      | TorrentMessageParams
-      | TorrentFurrow
-      | TorrentFurrowProxy,
-    arg2?:
-      | TorrentMessageBody
-      | TorrentMessageParams
-      | TorrentFurrow
-      | TorrentFurrowProxy,
-    arg3?:
-      | TorrentMessageBody
-      | TorrentMessageParams
-      | TorrentFurrow
-      | TorrentFurrowProxy,
+  send(
+    arg1?: TorrentMessageBody | TorrentMessageParams,
+    arg2?: TorrentMessageBody | TorrentMessageParams,
   ) {
     let body: TorrentMessageBody | undefined;
     let params: TorrentMessageParams | undefined;
-    let furrow: TorrentFurrow | TorrentFurrowProxy | undefined;
 
-    for (const arg of [arg1, arg2, arg3]) {
-      if (this.utils.is_message_params(arg)) params = arg;
-      else if (
-        arg instanceof TorrentFurrow ||
-        arg instanceof TorrentFurrowProxy
-      )
-        furrow = arg;
+    for (const arg of [arg1, arg2]) {
+      if (TorrentUtils.is_message_params(arg)) params = arg;
       else if (arg !== undefined) body = arg;
     }
 
     const message = new TorrentMessage(body || null, params);
-    const msg_bytes = await this.identity.sign(
-      TorrentUtils.to_array_buffer(message.body),
-    );
-    const signature = await this.identity.sign(msg_bytes);
+    const message_body = TorrentUtils.to_array_buffer(message.body);
 
-    this.peer.publish({
-      seeder: {
-        id: this.identifier,
-        name: this.name,
-        public_key: this.public_key,
-      },
-      ...(furrow
-        ? {
-            furrow: {
-              id: furrow.identifier,
-              name: furrow.name,
-            },
-          }
-        : {}),
-      message,
-      signature: TorrentUtils.to_base64_url(signature),
+    // NOTE: must have been drunk when i wrote this encryption and signing logic
+    // it looks like a mess, but it works, so not going to change it for now
+    // being drunk would have been a good excuse but i am just sober
+
+    // also sign with our identity if we are the root
+
+    TorrentUtils.encrypt(message_body, this.swarm_key).then((encrypted) => {
+      TorrentUtils.generate_mac(encrypted, this.swarm_key).then((mac) => {
+        const encrypted_message = new TorrentMessage(
+          TorrentUtils.to_base64_url(encrypted),
+        );
+        const encrypted_message_body = TorrentUtils.to_array_buffer(
+          encrypted_message.body,
+        );
+
+        const send_message = {
+          seeder: {
+            id: this.identifier,
+            name: this.name,
+          },
+          message,
+          encrypted_message,
+          artifacts: {
+            timestamp: Date.now(),
+            mac,
+          },
+        };
+
+        if (this.is_root)
+          this.identity.sign(encrypted_message_body).then((signature) => {
+            this.peer.publish({
+              ...send_message,
+              seeder: {
+                ...send_message.seeder,
+                pub_key: this.pub_key,
+              },
+              artifacts: {
+                ...send_message.artifacts,
+                pub_key: this.pub_key,
+                signature: TorrentUtils.to_base64_url(signature),
+              },
+            });
+          });
+        else this.peer.submit(send_message);
+      });
     });
   }
 
@@ -145,30 +165,38 @@ export class TorrentSeeder extends TorrentEmitter<"CREATED_FURROW"> {
       if (typeof arg2 === "string") name = arg2;
     }
 
-    const furrow = TorrentFurrow.create(this.peer, this, options, name);
-    this.furrows.push(furrow);
+    const furrow = new TorrentFurrow(this, options, name);
+    furrow.on("initialized", () => {
+      this.furrows.push(furrow);
 
-    this.emit<{
-      seeder: TorrentSeederHostedObj;
-      furrow: TorrentFurrowHostedObj;
-    }>("CREATED_FURROW", {
-      seeder: {
-        id: this.identifier,
-        s_name: this.name,
-        public_key: this.public_key,
-        ...(this.options && Object.keys(this.options).length > 0
-          ? { properties: { ...this.options } }
-          : {}),
-      },
-      furrow: {
-        id: furrow.identifier,
-        f_name: furrow.name,
-        ...(furrow.options && Object.keys(furrow.options).length > 0
-          ? { properties: { ...furrow.options } }
-          : {}),
-      },
+      // emit created furrow to update hosted
+      this.emit<{
+        seeder: TorrentHostedObj;
+        furrow: TorrentHostedObj;
+      }>("created_furrow", {
+        seeder: {
+          id: this.identifier,
+          name: this.name,
+          pub_key: this.pub_key,
+          ...(this.options && Object.keys(this.options).length > 0
+            ? { properties: { ...this.options } }
+            : {}),
+        },
+        furrow: {
+          id: furrow.identifier,
+          name: furrow.name,
+          pub_key: furrow.pub_key,
+          ...(furrow.options && Object.keys(furrow.options).length > 0
+            ? { properties: { ...furrow.options } }
+            : {}),
+        },
+      });
     });
 
     return furrow;
+  }
+
+  get_swarm_key() {
+    return this.swarm_key;
   }
 }

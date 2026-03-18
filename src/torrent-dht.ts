@@ -1,4 +1,5 @@
 import { TorrentEmitter } from "./torrent-emitter";
+import { TorrentIdentity } from "./torrent-identity";
 import { TorrentLRUCache } from "./torrent-lru";
 import { TorrentSignaller } from "./torrent-signaller";
 import {
@@ -11,7 +12,7 @@ import {
 import { TorrentUtils } from "./torrent-utils";
 
 export class TorrentDHTNode extends TorrentEmitter<
-  TorrentEventName | "CONTROL_MESSAGE" | "STATUS_UPDATE"
+  TorrentEventName | "control_message" | "status_update" | "swarm_key_exchanged"
 > {
   protected data_store: TorrentLRUCache<string, TorrentControlMessage>;
   // map of remote peer id -> TorrentPeerEntry { RTCPeerConnection, RTCDataChannel, TorrentBrokerBindings }
@@ -23,7 +24,10 @@ export class TorrentDHTNode extends TorrentEmitter<
   private signaller: TorrentSignaller;
 
   protected peer_graph: Map<string, Set<string>> = new Map();
-  readonly identifier: string = TorrentUtils.random_string(20);
+
+  protected identity: TorrentIdentity;
+  identifier: string = TorrentUtils.random_string(20);
+
   readonly min_peer_cluster_size: number = 3;
   readonly max_peer_cluster_size: number = 8;
   // frequency of sampling new peers
@@ -45,7 +49,16 @@ export class TorrentDHTNode extends TorrentEmitter<
       options?.lru_size ?? 1024,
     );
 
-    this.signaller = new TorrentSignaller(options?.ws_url);
+    this.signaller = new TorrentSignaller();
+    this.signaller.connect(options?.ws_url);
+
+    // assign identity for message signing and verification
+    TorrentIdentity.create().then((identity) => {
+      this.identity = identity;
+      identity.get_identifier().then((id) => {
+        this.identifier = id;
+      });
+    });
 
     if (options) {
       if (options?.min_peer_cluster_size && options?.min_peer_cluster_size > 0)
@@ -59,35 +72,32 @@ export class TorrentDHTNode extends TorrentEmitter<
     }
 
     // route incoming signalling messages into this instance
-    this.signaller.on_message = (m) => this._handle_signal_message(m);
+    this.signaller.on<TorrentSignalMessage>("message", (m) =>
+      this._handle_signal_message(m),
+    );
 
     // connect signaller and announce presence (HELO)
-    // NOTE: don't await in constructor; handle errors gracefully
-    this.signaller
-      .connect()
-      .then(() => {
-        try {
-          // send HELO explicitly as a control message broadcast (server should re-broadcast)
-          const hello_broadcast: TorrentSignalMessage = {
-            type: "HELO",
-            from: this.identifier,
-          };
-          this.signaller.send(hello_broadcast);
-          this.emit("PEER_CONNECTED", { peer_id: this.identifier });
-        } catch (e) {
-          console.warn("failed to send HELO via signaller", e);
-        }
-      })
-      .catch((err) => {
-        console.warn("signaller connect failed", err);
-      });
+    // send HELO explicitly as a control message broadcast (server should re-broadcast)
+
+    this.signaller.on("open", () => {
+      try {
+        const hello_broadcast: TorrentSignalMessage = {
+          type: "HELO",
+          from: this.identifier,
+        };
+        this.signaller.send(hello_broadcast);
+        this.emit("peer_connected", { peer_id: this.identifier });
+      } catch (e) {
+        console.warn("Failed to send HELO via signaller", e);
+      }
+    });
 
     setInterval(() => {
       // clean up dead peers
       // carry out before size checks to ensure
-      // a. HELO messages are sent to connect to new peers
+      // a. YOYO messages are sent to connect to new peers
       // b. avoid removing some connected peers with data channels
-      const peers_to_close = [];
+      const peers_to_close: string[] = [];
 
       for (const [peer_id, peer] of this.connected_peers) {
         if (!peer.dc || peer.dc.readyState !== "open") {
@@ -98,12 +108,9 @@ export class TorrentDHTNode extends TorrentEmitter<
       peers_to_close.forEach((peer_id) => this.close_peer_connection(peer_id));
 
       if (this.connected_peers.size < this.min_peer_cluster_size)
-        // request HELO from signaller or reconnect to random known peer
-        this.signaller.send({ type: "HELO", from: this.identifier });
-      if (this.connected_peers.size > this.max_peer_cluster_size) {
-        const worst_peer = this._get_worst_peer();
-        if (worst_peer) this.close_peer_connection(worst_peer);
-      }
+        // request YOYO from signaller or reconnect to random known peer
+        this.signaller.send({ type: "YOYO", from: this.identifier });
+      this._evict_worst_peer();
     }, this.partition_heal_interval);
 
     setInterval(() => {
@@ -183,7 +190,7 @@ export class TorrentDHTNode extends TorrentEmitter<
     } catch (e) {}
     this.connected_peers.delete(peer_id);
     this.peer_graph.delete(peer_id);
-    this.emit("PEER_DISCONNECTED", { peer_id: peer_id });
+    this.emit("peer_disconnected", { peer_id: peer_id });
   }
 
   private _create_peer_connection(
@@ -252,7 +259,7 @@ export class TorrentDHTNode extends TorrentEmitter<
       ) {
         this.connected_peers.delete(remote_id);
         this.peer_graph.delete(remote_id);
-        this.emit("PEER_DISCONNECTED", { peer_id: remote_id });
+        this.emit("peer_disconnected", { peer_id: remote_id });
       }
     };
 
@@ -275,26 +282,26 @@ export class TorrentDHTNode extends TorrentEmitter<
 
       // announce binds for currently bound seeders when channel opens
       for (const [seeder, furrow_set] of this.broker_bindings) {
-        const deserialized_seeder = this.utils.deserialize(seeder);
+        const deserialized_seeder = this.utils.deserialize_binding(seeder);
 
         const announce: TorrentControlMessage = {
           type: "ANNOUNCE_BIND",
           control_id: TorrentUtils.random_string(),
           from: this.identifier,
           seeder: {
-            id: deserialized_seeder.s_id,
+            id: deserialized_seeder.id,
             name: deserialized_seeder.name,
           },
         };
 
         if (furrow_set.size > 0) {
           for (const furrow of furrow_set) {
-            const deserialized_furrow = this.utils.deserialize(furrow);
+            const deserialized_furrow = this.utils.deserialize_binding(furrow);
 
             const announce_with_furrow: TorrentControlMessage = {
               ...announce,
               furrow: {
-                id: deserialized_furrow.f_id,
+                id: deserialized_furrow.id,
                 name: deserialized_furrow.name,
                 routing_key: deserialized_furrow.routing_key,
               },
@@ -318,14 +325,14 @@ export class TorrentDHTNode extends TorrentEmitter<
       }
 
       // notify listeners
-      this.emit("PEER_CONNECTED", { peer_id: remote_id, dc });
+      this.emit("peer_connected", { peer_id: remote_id, dc });
     };
 
     dc.onmessage = (ev) => {
       try {
         const parsed =
           typeof ev.data === "string" ? JSON.parse(ev.data) : ev.data;
-        this.emit("CONTROL_MESSAGE", {
+        this.emit("control_message", {
           parsed: parsed as TorrentControlMessage,
           remote_id,
         });
@@ -337,7 +344,7 @@ export class TorrentDHTNode extends TorrentEmitter<
     dc.onclose = () => {
       this.connected_peers.delete(remote_id);
       this.peer_graph.delete(remote_id);
-      this.emit("PEER_DISCONNECTED", { peer_id: remote_id });
+      this.emit("peer_disconnected", { peer_id: remote_id });
     };
   }
 
@@ -381,7 +388,7 @@ export class TorrentDHTNode extends TorrentEmitter<
 
   private _handle_signal_message(msg: TorrentSignalMessage) {
     // ignore our own messages (except for signaller identify)
-    if (msg.type !== "SIGNALLER" && msg.from === this.identifier) return;
+    if (msg.from === this.identifier) return;
 
     switch (msg.type) {
       case "HELO":
@@ -392,6 +399,11 @@ export class TorrentDHTNode extends TorrentEmitter<
         return this._handle_hihi(
           msg as Extract<TorrentSignalMessage, { type: "HIHI" }>,
         );
+      case "YOYO":
+        return this._handle_yoyo(
+          msg as Extract<TorrentSignalMessage, { type: "YOYO" }>,
+        );
+
       case "OFFER":
         return this._handle_offer(
           msg as Extract<TorrentSignalMessage, { type: "OFFER" }>,
@@ -577,10 +589,7 @@ export class TorrentDHTNode extends TorrentEmitter<
     if (this.connected_peers.has(from)) return;
     // dont add new peers when at max
     // disconnect if over max
-    if (this.connected_peers.size >= this.max_peer_cluster_size) {
-      const worst_peer = this._get_worst_peer();
-      if (worst_peer) this.close_peer_connection(worst_peer);
-    }
+    this._evict_worst_peer();
 
     if (this.connected_peers.size < this.max_peer_cluster_size) {
       // they might not have discovered this peer so say "HIHI"
@@ -599,9 +608,33 @@ export class TorrentDHTNode extends TorrentEmitter<
   private _handle_hihi(msg: Extract<TorrentSignalMessage, { type: "HIHI" }>) {
     const from = msg.from;
     if (from === this.identifier) return;
-    if (msg.to !== this.identifier) return;
-    // initiate connection to the peer that sent HELO_ACK
+    if (this.connected_peers.has(from)) return;
+
     this._initiate_connection_to_peer(from);
+  }
+
+  private _handle_yoyo(msg: Extract<TorrentSignalMessage, { type: "YOYO" }>) {
+    const from = msg.from;
+    // if we already have a connection to them, ignore
+    if (from === this.identifier) return;
+    if (this.connected_peers.has(from)) return;
+
+    this._evict_worst_peer();
+
+    if (this.connected_peers.size < this.max_peer_cluster_size) {
+      // they might not have discovered this peer so say "YOYO"
+      const yoyo_broadcast: TorrentSignalMessage = {
+        type: "YOYO",
+        from: this.identifier,
+        to: msg.from,
+      };
+      this.signaller.send(yoyo_broadcast);
+
+      if (msg?.to && msg?.to === this.identifier)
+        // if there is a target and its us we should intiate connection
+        // create pc + dc and send OFFER (deterministic tie-break inside)
+        this._initiate_connection_to_peer(from);
+    }
   }
 
   private _handle_status(
@@ -625,7 +658,7 @@ export class TorrentDHTNode extends TorrentEmitter<
     });
 
     // msg.peers contains the peer stats from the remote node
-    this.emit("STATUS_UPDATE", msg);
+    this.emit("status_update", msg);
   }
 
   private async _get_connection_cost(pc: RTCPeerConnection) {
@@ -669,7 +702,7 @@ export class TorrentDHTNode extends TorrentEmitter<
       jitter * 1000 +
       1 / (available_outgoing_bitrate + 1);
 
-    const quality = TorrentUtils._get_quality({
+    const quality = TorrentUtils.get_peer_quality({
       plr: packet_loss_ratio,
       jitter,
       rtt,
@@ -690,19 +723,23 @@ export class TorrentDHTNode extends TorrentEmitter<
     return alpha * cost + (1 - alpha) * prev_distance;
   }
 
-  // get the worst peer and evict
-  private _get_worst_peer(): string | null {
-    let worst_id: string | null = null;
-    let worst_distance = -Infinity;
+  // get the worst peers that can be evicted
+  private _get_worst_peers(num: number = 1) {
+    return Array.from(this.connected_peers.entries())
+      .sort(([, a], [, b]) => {
+        const dist_a = a.stats?.distance ?? Infinity;
+        const dist_b = b.stats?.distance ?? Infinity;
+        return dist_b - dist_a; // descending (worst first)
+      })
+      .slice(0, num)
+      .map(([peer_id]) => peer_id);
+  }
 
-    this.connected_peers.forEach((peer, peer_id) => {
-      const distance = peer.stats?.distance ?? Infinity;
-      if (distance > worst_distance) {
-        worst_distance = distance;
-        worst_id = peer_id;
-      }
-    });
+  private _evict_worst_peer() {
+    const overflow = this.connected_peers.size - this.max_peer_cluster_size + 1; // +1 to allow for adding one more peer
+    if (overflow <= 0) return;
 
-    return worst_id;
+    const worst_peers = this._get_worst_peers(overflow);
+    worst_peers.forEach((peer_id) => this.close_peer_connection(peer_id));
   }
 }

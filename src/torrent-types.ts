@@ -1,5 +1,10 @@
 import { TorrentMessage } from "./torrent-message";
 
+export type TorrentPeerHostingSize = {
+  number_of_seeders: number;
+  number_of_furrows_per_seeder: number;
+};
+
 type SeederFurrowSharedParams = {
   passive?: boolean;
   durable?: boolean;
@@ -29,8 +34,21 @@ export type TorrentCallBack = (message: TorrentMessage) => void;
 export type TorrentAckCallBack = (data: any) => void;
 
 export type TorrentMessageObject = {
-  body?: TorrentMessageBody;
+  body: TorrentMessageBody;
   properties?: TorrentMessageProperties;
+  artifacts: {
+    mac: string; // message authentication code for the message body and properties
+    pub_key: JsonWebKey;
+    timestamp: number;
+    signature: string;
+  };
+};
+
+export type TorrentMessageObjectWithoutSig = Omit<
+  TorrentMessageObject,
+  "artifacts"
+> & {
+  artifacts: Omit<TorrentMessageObject["artifacts"], "signature" | "pub_key">;
 };
 
 export type TorrentMessageBody =
@@ -61,22 +79,40 @@ export type TorrentMessageParams = {
 };
 
 export type TorrentEventName =
-  | "PEER_CONNECTED"
-  | "PEER_DISCONNECTED"
-  | "BIND"
-  | "UNBIND"
-  | "PEER_BIND"
-  | "PEER_UNBIND"
-  | "PUBLISH"
-  | "MESSAGE_RECEIVE"
-  | "FOUND"
-  | "NOT_FOUND"
-  | "ACK";
+  | "peer_connected"
+  | "peer_disconnected"
+  | "bind"
+  | "unbind"
+  | "peer_bind"
+  | "peer_unbind"
+  | "publish"
+  | "message_receive"
+  | "found"
+  | "not_found"
+  | "connected_remote_seeder"
+  | "message_malformed"
+  | "ack";
 
 export type TorrentControlSeederOrFurrow = {
   id: string;
   name: string;
 };
+
+export type TorrentControlFurrow = TorrentControlSeederOrFurrow & {
+  pub_key: JsonWebKey;
+};
+
+export type TorrentControlOriginSeeder = TorrentControlSeederOrFurrow & {
+  pub_key: JsonWebKey;
+};
+
+export type TorrentControlCertifiedSeeder = TorrentControlSeederOrFurrow & {
+  cert: TorrentSeederCertificate;
+};
+
+export type TorrentControlSeeder =
+  | TorrentControlOriginSeeder
+  | TorrentControlCertifiedSeeder;
 
 export type TorrentControlBindFurrow = TorrentControlSeederOrFurrow & {
   routing_key?: string;
@@ -88,6 +124,11 @@ type TorrentControlPeerInfo = {
   to?: string;
   seeder: TorrentControlSeederOrFurrow;
   furrow?: TorrentControlSeederOrFurrow;
+  artifacts: {
+    pub_key: JsonWebKey;
+    timestamp: number;
+    signature: string;
+  };
 };
 
 type TorrentControlPeerBindInfo = {
@@ -98,64 +139,66 @@ type TorrentControlPeerBindInfo = {
   furrow?: TorrentControlBindFurrow;
 };
 
+export type TorrentSeederCertificate = {
+  pub_key: string;
+  exp: number;
+  scope: {
+    seeder: TorrentControlSeeder;
+    furrow?: TorrentControlFurrow;
+  };
+  perms: TorrentSeederPermissions[];
+  signature: string;
+};
+
+type TorrentSeederPermissions = "sign" | "verify";
+
 export type TorrentControlMessage =
   | (TorrentControlPeerBindInfo & { type: "ANNOUNCE_BIND" })
   | (TorrentControlPeerBindInfo & { type: "ANNOUNCE_UNBIND" })
   | (TorrentControlPeerInfo & {
       type: "PUBLISH";
-      message?: TorrentMessageObject;
-      seeder: TorrentControlSeederOrFurrow & { public_key: JsonWebKey };
-      artifacts: {
-        timestamp: number;
-        signature: string;
-      };
+      message: TorrentMessageObject;
+      seeder: TorrentControlSeeder;
+      furrow?: TorrentControlFurrow;
     })
   | (TorrentControlPeerInfo & {
       type: "SUBMIT";
-      message?: TorrentMessageObject;
-      seeder: TorrentControlSeederOrFurrow;
+      message: TorrentMessageObjectWithoutSig;
     })
   | (TorrentControlPeerInfo & { type: "ACK"; message_id: string })
   | (TorrentControlPeerInfo & { type: "FIND" })
   | (TorrentControlPeerInfo & { type: "NOT_FOUND" })
   | (TorrentControlPeerInfo & {
-      type: "CREATE_FURROW_ON_HOST";
-      furrow: { name: string };
-    })
-  | (TorrentControlPeerInfo & { type: "FURROW_CREATED_ON_HOST" })
-  | {
-      control_id: string;
-      from: string;
-      to?: string;
-      seeder: TorrentSeederHostedObj & { public_key: JsonWebKey };
-      furrow?: TorrentFurrowHostedObj;
+      seeder: TorrentHostedObj;
+      furrow?: TorrentHostedObj;
       type: "FOUND";
-    }
-  | {
-      type: "MIGRATE";
-      from: string;
-      to?: string;
-      control_id: string;
-      migration_key: string;
-      migration_object: {
-        seeder: TorrentControlSeederOrFurrow;
-        furrows: TorrentControlSeederOrFurrow[];
-      }[];
-      timestamp?: number;
-    }
-  | {
-      type: "MIGRATION_COMPLETE";
-      from: string;
-      control_id: string;
-      migration_key: string;
-    }
-  | { type: "MAX_CAPACITY"; from: string; control_id: string };
+    })
+  // key shit for exchange (seeder <-> peer)
+  // routes through the peere hosting the seeder
+  // it'll be a miracle if this works
+  | (TorrentControlPeerInfo & {
+      type: "EPH_KEY_OFFER";
+      eph_pub_key: string;
+    })
+  | (TorrentControlPeerInfo & {
+      type: "EPH_KEY_EXCHANGE";
+      eph_pub_key: string; // ur own ephemeral public key
+      key_sig: {
+        eph_pub_key: string; // the ephemeral public key you signed
+        signature: string;
+        identity_pub_key: JsonWebKey;
+      };
+      encrypted: {
+        aes_salt: string;
+        swarm_key: string;
+      };
+    });
 
-// Signal message for WebRTC
 export type TorrentSignalMessage =
   | { type: "HELO"; from: string }
   | { type: "HIHI"; from: string; to: string }
-  | { type: "SIGNALLER"; identifier: string }
+  | { type: "YOYO"; from: string; to?: string } // used instead of HELO and HIHI for partition recovery
+  | { type: "BYE"; from: string; to?: string }
   | { type: "OFFER"; from: string; to?: string; sdp: RTCSessionDescriptionInit }
   | { type: "ANSWER"; from: string; to: string; sdp: RTCSessionDescriptionInit }
   | { type: "ICE"; from: string; to?: string; candidate: RTCIceCandidateInit }
@@ -171,14 +214,9 @@ export type TorrentSignalMessage =
       };
     };
 
-export type TorrentRTCMessage = {
-  type: "RELAY_CONTROL";
-  from: string;
-  to?: string;
-  control: TorrentControlMessage;
-};
-
-export type TorrentSignalHandler = (msg: TorrentSignalMessage) => void;
+export type TorrentSignalEventMessage =
+  | { type: "SIGNALLER_CONNECTED"; ident: string; url: string }
+  | { type: "SIGNALLER_DISCONNECTED"; ident: string; url: string };
 
 export type TorrentPeerQuality =
   | "EXCELLENT"
@@ -194,7 +232,7 @@ export type TorrentPeerEntry = {
   bb?: TorrentBrokerBindings;
   ice_queue?: RTCIceCandidateInit[];
   making_offer?: boolean;
-  israp?: boolean; // is setting remote answer pending
+  israp?: boolean; // is setting remote answer pending?
   stats?: {
     cost?: number;
     rtt?: number; // round trip time
@@ -206,86 +244,128 @@ export type TorrentPeerEntry = {
   };
 };
 
-// PLEASE DO NOT TOUCH
-// IT IS A MIRACLE THAT IT WORKS
-
-type TorrentBrand<K, T> = K & { readonly __brand: T };
-
-export type TorrentSeederBindingBrand = TorrentBrand<string, "SeederKey">;
-export type TorrentFurrowBindingBrand = TorrentBrand<string, "FurrowKey">;
-
-export type TorrentSeederBindingObj = {
-  s_id: string;
-  name: string;
-  public_key?: JsonWebKey;
-};
-
-export type TorrentFurrowBindingObj = {
-  f_id: string;
-  name: string;
-  routing_key: string;
-};
-
-// map [seeder_id, seeder_name, seeder_publick_key] -> [furrow_id, furrow_name, routing_key][]
 export type TorrentBrokerBindings = Map<
   TorrentSeederBindingBrand,
   Set<TorrentFurrowBindingBrand>
 >;
 
-export type TorrentSeederHostedBrand = TorrentBrand<string, "SeederHostedObj">;
-export type TorrentFurrowHostedBrand = TorrentBrand<string, "FurrowHostedObj">;
-
-// distinguish seeder and furrow `name` to avoid branding issues
-export type TorrentSeederHostedObj = {
-  id: string;
-  s_name: string;
-  public_key: JsonWebKey;
-  properties?: TorrentSeederParams;
-};
-
-export type TorrentFurrowHostedObj = {
-  id: string;
-  f_name: string;
-  properties?: TorrentFurrowParams;
-};
-
 export type TorrentBrokerHost = Map<
-  TorrentSeederHostedBrand,
-  Set<TorrentFurrowHostedBrand>
+  TorrentHostedBrand,
+  Set<TorrentHostedBrand>
 >;
 
-export type TorrentSerializableObj =
-  | TorrentFurrowHostedObj
-  | TorrentSeederHostedObj
-  | TorrentFurrowBindingObj
-  | TorrentSeederBindingObj;
+type TorrentBrand<K, T> = K & { readonly __brand: T };
 
-export type TorrentDeserializableKey =
-  | TorrentFurrowHostedBrand
-  | TorrentSeederHostedBrand
-  | TorrentFurrowBindingBrand
-  | TorrentSeederBindingBrand;
+export type TorrentSeederBindingBrand = TorrentBrand<
+  string,
+  "SeederBindingKey"
+>;
+export type TorrentFurrowBindingBrand = TorrentBrand<
+  string,
+  "FurrowBindingKey"
+>;
 
-// deserialization mapping
-export type TorrentDeserializeObjOf<K extends TorrentDeserializableKey> =
-  K extends TorrentSeederBindingBrand
+export type TorrentSeederBindingObj =
+  | {
+      id: string;
+      name: string;
+      pub_key?: JsonWebKey;
+      swarm_key?: ArrayBuffer;
+    }
+  | {
+      id: string;
+      name: string;
+      cert?: TorrentSeederCertificate;
+      swarm_key?: ArrayBuffer;
+    };
+
+export type TorrentFurrowBindingObj = {
+  id: string;
+  name: string;
+  pub_key?: JsonWebKey;
+  routing_key: string;
+};
+
+export type TorrentHostedBrand = TorrentBrand<string, "HostedObj">;
+
+export type TorrentHostedObj =
+  | {
+      id: string;
+      name: string;
+      pub_key: JsonWebKey;
+      cert?: never;
+      properties?: TorrentSeederParams;
+    }
+  | {
+      id: string;
+      name: string;
+      pub_key?: never;
+      cert: TorrentSeederCertificate;
+      properties?: TorrentSeederParams;
+    };
+
+export type TorrentSerializableOrDeserializableBindingObj =
+  | TorrentSeederBindingObj
+  | TorrentFurrowBindingObj;
+
+export type TorrentSerializableOrDeserializableBindingKey =
+  | TorrentSeederBindingBrand
+  | TorrentFurrowBindingBrand;
+
+export type TorrentDeserializableHostedObjOf<K extends TorrentHostedBrand> =
+  K extends TorrentHostedBrand ? TorrentHostedObj : never;
+
+export type TorrentDeserializableBindingObjOf<
+  K extends TorrentSerializableOrDeserializableBindingKey,
+> = K extends TorrentFurrowBindingBrand
+  ? TorrentFurrowBindingObj
+  : K extends TorrentSeederBindingBrand
     ? TorrentSeederBindingObj
-    : K extends TorrentFurrowBindingBrand
-      ? TorrentFurrowBindingObj
-      : K extends TorrentSeederHostedBrand
-        ? TorrentSeederHostedObj
-        : K extends TorrentFurrowHostedBrand
-          ? TorrentFurrowHostedObj
-          : never;
+    : never;
 
-// serialization mapping
-export type TorrentSerializeKeyOf<T extends TorrentSerializableObj> =
-  T extends TorrentSeederBindingObj
+export type TorrentSerializableHostedKeyOf<T extends TorrentHostedObj> =
+  T extends TorrentHostedObj ? TorrentHostedBrand : never;
+
+export type TorrentSerializableBindingKeyOf<
+  T extends TorrentSerializableOrDeserializableBindingObj,
+> = T extends TorrentFurrowBindingObj
+  ? TorrentFurrowBindingBrand
+  : T extends TorrentSeederBindingObj
     ? TorrentSeederBindingBrand
-    : T extends TorrentFurrowBindingObj
-      ? TorrentFurrowBindingBrand
-      : T extends TorrentSeederHostedObj
-        ? TorrentSeederHostedBrand
-        : T extends TorrentFurrowHostedObj
-          ? TorrentFurrowHostedBrand
-          : never;
+    : never;
+
+// for converting to and from array buffers
+
+type PrimitiveNode =
+  | { t: "null" }
+  | { t: "undef" }
+  | { t: "num"; v: number }
+  | { t: "str"; v: string }
+  | { t: "bool"; v: boolean }
+  | { t: "nan" }
+  | { t: "inf" }
+  | { t: "-inf" }
+  | { t: "bigint"; v: string };
+
+type RefNode = { t: "ref"; v: number };
+
+type DateNode = { t: "date"; v: string; id: number };
+type RegexNode = { t: "regex"; v: [string, string]; id: number };
+type MapNode = { t: "map"; v: [Node, Node][]; id: number };
+type SetNode = { t: "set"; v: Node[]; id: number };
+type TypedArrayNode = { t: "typed"; c: string; v: number[]; id: number };
+type ArrayBufferNode = { t: "arraybuffer"; v: number[]; id: number };
+type ArrayNode = { t: "arr"; v: Node[]; id: number };
+type ObjectNode = { t: "obj"; v: Record<string, Node>; id: number };
+
+export type Node =
+  | PrimitiveNode
+  | RefNode
+  | DateNode
+  | RegexNode
+  | MapNode
+  | SetNode
+  | TypedArrayNode
+  | ArrayBufferNode
+  | ArrayNode
+  | ObjectNode;

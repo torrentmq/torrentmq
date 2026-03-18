@@ -1,7 +1,7 @@
 {
   "name": "torrentmq",
   "version": "0.0.0",
-  "description": "",
+  "description": "WebRTC-based peer-to-peer message broker",
   "types": "./dist/index.d.ts",
   "import": "./dist/index.mjs",
   "require": "./dist/index.js",
@@ -10,11 +10,19 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
-  "author": "",
+  "author": "Adrian Tobi",
   "license": "ISC",
   "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/torrentmq/torrentmq/issues"
+  },
+  "homepage": "https://github.com/torrentmq/torrentmq#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/torrentmq/torrentmq.git"
+  },
   "devDependencies": {
-    "tsup": "^8.5.0",
+    "tsup": "^8.5.1",
     "typescript": "^5.9.3"
   }
 }

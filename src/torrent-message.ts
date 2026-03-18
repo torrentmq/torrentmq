@@ -20,7 +20,7 @@ export class TorrentMessage {
       message_id: TorrentUtils.random_string(),
       routing_key: params?.routing_key,
       re_delivered: false,
-      body_size: TorrentUtils._compute_body_size(message_body),
+      body_size: TorrentUtils.compute_body_size(message_body),
 
       headers: {
         hop_count: 0,

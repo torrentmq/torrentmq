@@ -19,7 +19,7 @@ export class TorrentEmitter<TEvent extends string> {
     }
 
     if (!listener) {
-      throw new TorrentError("Handler must be provided for on(event, handler)");
+      throw new TorrentError(`Handler must be provided for event: ${event}`);
     }
 
     if (!this._events.has(event)) {
@@ -29,7 +29,7 @@ export class TorrentEmitter<TEvent extends string> {
     this._events.get(event)!.add(listener);
   }
 
-  protected emit<T>(event: TEvent, payload: T) {
+  protected emit<T>(event: TEvent, payload?: T) {
     const handlers = this._events.get(event);
     if (!handlers) return;
     for (const h of handlers) {

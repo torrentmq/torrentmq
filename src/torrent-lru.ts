@@ -22,6 +22,7 @@ export class TorrentLRUCache<K, V> {
   private map: Map<K, TorrentLRUNode<K, V>> = new Map();
   private head: TorrentLRUNode<K, V> | null = null;
   private tail: TorrentLRUNode<K, V> | null = null;
+  private size = 0;
 
   constructor(capacity?: number) {
     if (capacity) this.capacity = capacity;
@@ -36,6 +37,8 @@ export class TorrentLRUCache<K, V> {
 
     node.prev = null;
     node.next = null;
+
+    this.size--;
   }
 
   private insert_at_head(node: TorrentLRUNode<K, V>) {
@@ -46,6 +49,8 @@ export class TorrentLRUCache<K, V> {
     this.head = node;
 
     if (!this.tail) this.tail = node;
+
+    this.size++;
   }
 
   get(key: K): V | undefined {

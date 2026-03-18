@@ -1,13 +1,17 @@
+import { TorrentError } from "./torrent-error";
 import {
-  TorrentDeserializableKey,
-  TorrentDeserializeObjOf,
-  TorrentFurrowParams,
+  Node,
+  TorrentDeserializableBindingObjOf,
+  TorrentDeserializableHostedObjOf,
+  TorrentHostedBrand,
+  TorrentHostedObj,
   TorrentMessageBody,
   TorrentMessageParams,
   TorrentPeerQuality,
-  TorrentSeederParams,
-  TorrentSerializableObj,
-  TorrentSerializeKeyOf,
+  TorrentSerializableBindingKeyOf,
+  TorrentSerializableHostedKeyOf,
+  TorrentSerializableOrDeserializableBindingKey,
+  TorrentSerializableOrDeserializableBindingObj,
 } from "./torrent-types";
 
 export class TorrentUtils {
@@ -31,7 +35,7 @@ export class TorrentUtils {
       .join("");
   }
 
-  is_message_params(arg: unknown): arg is TorrentMessageParams {
+  static is_message_params(arg: unknown): arg is TorrentMessageParams {
     return (
       arg !== null &&
       typeof arg === "object" &&
@@ -39,43 +43,11 @@ export class TorrentUtils {
     );
   }
 
-  is_seeder_params(arg: unknown): arg is TorrentSeederParams {
-    return (
-      arg !== null &&
-      typeof arg === "object" &&
-      ("type" in arg ||
-        "internal" in arg ||
-        "args" in arg ||
-        "passive" in arg ||
-        "durable" in arg ||
-        "auto_delete" in arg ||
-        "auto_plant" in arg)
-    );
-  }
+  static security_and_host() {
+    const is_secure = window.location.protocol === "https:";
+    const host = window.location.hostname;
 
-  is_furrow_params(arg: unknown): arg is TorrentFurrowParams {
-    return (
-      arg !== null &&
-      typeof arg === "object" &&
-      ("auto_bind" in arg ||
-        "exclusive" in arg ||
-        "passive" in arg ||
-        "durable" in arg ||
-        "auto_delete" in arg ||
-        "auto_plant" in arg)
-    );
-  }
-
-  serialize<T extends TorrentSerializableObj>(
-    value: T,
-  ): TorrentSerializeKeyOf<T> {
-    return JSON.stringify(value) as TorrentSerializeKeyOf<T>;
-  }
-
-  deserialize<K extends TorrentDeserializableKey>(
-    value: K,
-  ): TorrentDeserializeObjOf<K> {
-    return JSON.parse(value) as TorrentDeserializeObjOf<K>;
+    return { host, is_secure };
   }
 
   static to_base64_url(buffer: ArrayBuffer): string {
@@ -106,77 +78,152 @@ export class TorrentUtils {
   }
 
   static to_array_buffer(value: unknown): ArrayBuffer {
-    if (value === null || value === undefined) {
-      return new ArrayBuffer(0);
+    const seen = new Map<unknown, number>();
+    let id = 0;
+
+    function encode(val: unknown): Node {
+      if (val === null) return { t: "null" };
+
+      const type = typeof val;
+
+      if (type === "number") {
+        if (Number.isNaN(val)) return { t: "nan" };
+        if (val === Infinity) return { t: "inf" };
+        if (val === -Infinity) return { t: "-inf" };
+        return { t: "num", v: val as number };
+      }
+
+      if (type === "string") return { t: "str", v: val as string };
+      if (type === "boolean") return { t: "bool", v: val as boolean };
+      if (type === "undefined") return { t: "undef" };
+      if (type === "bigint")
+        return { t: "bigint", v: (val as bigint).toString() };
+
+      if (type === "object") {
+        if (seen.has(val)) return { t: "ref", v: seen.get(val)! };
+        const ref_id = id++;
+        seen.set(val, ref_id);
+
+        if (val instanceof Date)
+          return { t: "date", v: val.toISOString(), id: ref_id };
+        if (val instanceof RegExp)
+          return { t: "regex", v: [val.source, val.flags], id: ref_id };
+        if (val instanceof Map)
+          return {
+            t: "map",
+            v: Array.from(val.entries(), ([k, v]) => [encode(k), encode(v)]),
+            id: ref_id,
+          };
+        if (val instanceof Set)
+          return { t: "set", v: Array.from(val, encode), id: ref_id };
+        if (ArrayBuffer.isView(val))
+          return {
+            t: "typed",
+            c: val.constructor.name,
+            v: Array.from(val as unknown as ArrayLike<number>),
+            id: ref_id,
+          };
+        if (val instanceof ArrayBuffer)
+          return {
+            t: "arraybuffer",
+            v: Array.from(new Uint8Array(val)),
+            id: ref_id,
+          };
+        if (Array.isArray(val))
+          return { t: "arr", v: val.map(encode), id: ref_id };
+
+        const obj: Record<string, Node> = {};
+        for (const k in val as any)
+          obj[k] = encode((val as Record<string, unknown>)[k]);
+        return { t: "obj", v: obj, id: ref_id };
+      }
+
+      throw new TorrentError("Unsupported type: " + type);
     }
 
-    // Already a byte array
-    if (value instanceof Uint8Array) {
-      const copy = new Uint8Array(value.byteLength);
-      copy.set(value);
-      return copy.buffer;
-    }
-
-    let str: string;
-
-    switch (typeof value) {
-      case "string":
-        str = value;
-        break;
-      case "number":
-      case "boolean":
-        str = value.toString();
-        break;
-      case "object":
-        str = JSON.stringify(value);
-        break;
-      default:
-        throw new Error(`Cannot convert type ${typeof value} to ArrayBuffer`);
-    }
-
-    return this.encoder.encode(str).buffer;
+    const json = JSON.stringify(encode(value));
+    return new TextEncoder().encode(json).buffer;
   }
 
-  static from_array_buffer(
-    buffer: ArrayBuffer,
-    typeHint?: "string" | "number" | "boolean" | "object",
-  ): unknown {
-    if (!buffer.byteLength) return null;
+  static from_array_buffer<T = unknown>(buffer: ArrayBuffer): T {
+    const json = this.decoder.decode(new Uint8Array(buffer));
+    const data = JSON.parse(json) as Node;
 
-    const str = this.decoder.decode(buffer);
+    const refs = new Map<number, unknown>();
 
-    if (!typeHint) return str; // default to string
-
-    switch (typeHint) {
-      case "string":
-        return str;
-      case "number":
-        return Number(str);
-      case "boolean":
-        return str === "true";
-      case "object":
-        return JSON.parse(str);
-      default:
-        throw new Error(`Unsupported typeHint: ${typeHint}`);
+    function decode(node: Node): unknown {
+      switch (node.t) {
+        case "null":
+          return null;
+        case "num":
+          return node.v;
+        case "str":
+          return node.v;
+        case "bool":
+          return node.v;
+        case "undef":
+          return undefined;
+        case "nan":
+          return NaN;
+        case "inf":
+          return Infinity;
+        case "-inf":
+          return -Infinity;
+        case "bigint":
+          return BigInt(node.v);
+        case "ref":
+          return refs.get(node.v);
+        case "date": {
+          const d = new Date(node.v);
+          refs.set(node.id, d);
+          return d;
+        }
+        case "regex": {
+          const r = new RegExp(node.v[0], node.v[1]);
+          refs.set(node.id, r);
+          return r;
+        }
+        case "map": {
+          const m = new Map<unknown, unknown>();
+          refs.set(node.id, m);
+          node.v.forEach(([k, v]) => m.set(decode(k), decode(v)));
+          return m;
+        }
+        case "set": {
+          const s = new Set<unknown>();
+          refs.set(node.id, s);
+          node.v.forEach((v) => s.add(decode(v)));
+          return s;
+        }
+        case "typed": {
+          const arr = new (globalThis as Record<string, any>)[node.c](node.v);
+          refs.set(node.id, arr);
+          return arr;
+        }
+        case "arraybuffer": {
+          const buf = new Uint8Array(node.v).buffer;
+          refs.set(node.id, buf);
+          return buf;
+        }
+        case "arr": {
+          const a: unknown[] = [];
+          refs.set(node.id, a);
+          node.v.forEach((v) => a.push(decode(v)));
+          return a;
+        }
+        case "obj": {
+          const o: Record<string, unknown> = {};
+          refs.set(node.id, o);
+          for (const k in node.v) o[k] = decode(node.v[k]);
+          return o;
+        }
+      }
     }
+
+    return decode(data) as T;
   }
 
-  static _get_quality(metrics: {
-    plr: number;
-    rtt: number;
-    jitter: number;
-  }): TorrentPeerQuality {
-    const { plr, rtt, jitter } = metrics;
-
-    if (rtt < 0.08 && plr < 0.01 && jitter < 0.005) return "EXCELLENT";
-    else if (rtt < 0.2 && plr < 0.03 && jitter < 0.015) return "GOOD";
-    else if (rtt < 0.5 && plr < 0.08 && jitter < 0.03) return "FAIR";
-    else if (rtt < 1.5 && plr < 0.2 && jitter < 0.1) return "POOR";
-    else if (rtt >= 1.5 || plr >= 0.2 || jitter >= 0.1) return "BAD";
-    else return "DEAD";
-  }
-
-  static _compute_body_size(body: TorrentMessageBody): number {
+  static compute_body_size(body: TorrentMessageBody): number {
     if (body === null) return 0;
 
     if (body instanceof Uint8Array) {
@@ -197,5 +244,148 @@ export class TorrentUtils {
       default:
         return 0;
     }
+  }
+
+  static get_peer_quality(metrics: {
+    plr: number;
+    rtt: number;
+    jitter: number;
+  }): TorrentPeerQuality {
+    const { plr, rtt, jitter } = metrics;
+
+    if (rtt < 0.08 && plr < 0.01 && jitter < 0.005) return "EXCELLENT";
+    else if (rtt < 0.2 && plr < 0.03 && jitter < 0.015) return "GOOD";
+    else if (rtt < 0.5 && plr < 0.08 && jitter < 0.03) return "FAIR";
+    else if (rtt < 1.5 && plr < 0.2 && jitter < 0.1) return "POOR";
+    else if (rtt >= 1.5 || plr >= 0.2 || jitter >= 0.1) return "BAD";
+    else return "DEAD";
+  }
+
+  serialize_hosted<T extends TorrentHostedObj>(
+    value: T,
+  ): TorrentSerializableHostedKeyOf<T> {
+    return JSON.stringify(value) as TorrentSerializableHostedKeyOf<T>;
+  }
+
+  deserialize_hosted<K extends TorrentHostedBrand>(
+    value: K,
+  ): TorrentDeserializableHostedObjOf<K> {
+    return JSON.parse(value) as TorrentDeserializableHostedObjOf<K>;
+  }
+
+  serialize_binding<T extends TorrentSerializableOrDeserializableBindingObj>(
+    value: T,
+  ): TorrentSerializableBindingKeyOf<T> {
+    return JSON.stringify(value) as TorrentSerializableBindingKeyOf<T>;
+  }
+
+  deserialize_binding<K extends TorrentSerializableOrDeserializableBindingKey>(
+    value: K,
+  ): TorrentDeserializableBindingObjOf<K> {
+    return JSON.parse(value) as TorrentDeserializableBindingObjOf<K>;
+  }
+
+  static async generate_mac(
+    data: ArrayBuffer,
+    raw_key: ArrayBuffer,
+  ): Promise<string> {
+    const key = await crypto.subtle.importKey(
+      "raw",
+      raw_key,
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+
+    const signature = await crypto.subtle.sign("HMAC", key, data);
+    return this.to_base64_url(signature);
+  }
+
+  static async verify_mac(
+    data: ArrayBuffer,
+    raw_key: ArrayBuffer,
+    mac: string,
+  ): Promise<boolean> {
+    const key = await crypto.subtle.importKey(
+      "raw",
+      raw_key,
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["verify"],
+    );
+
+    const signature = this.from_base64_url(mac);
+    return crypto.subtle.verify("HMAC", key, signature, data);
+  }
+
+  static async encrypt(
+    data: ArrayBuffer,
+    raw_key: ArrayBuffer | CryptoKey,
+  ): Promise<ArrayBuffer> {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key =
+      raw_key instanceof ArrayBuffer
+        ? await crypto.subtle.importKey(
+            "raw",
+            raw_key,
+            { name: "AES-GCM" },
+            false,
+            ["encrypt"],
+          )
+        : raw_key;
+
+    const encrypted = await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv },
+      key,
+      data,
+    );
+
+    // Prepend IV to encrypted data for later decryption
+    const result = new Uint8Array(iv.length + encrypted.byteLength);
+    result.set(iv, 0);
+    result.set(new Uint8Array(encrypted), iv.length);
+    return result.buffer;
+  }
+
+  static async decrypt(
+    encrypted_data: ArrayBuffer,
+    raw_key: ArrayBuffer | CryptoKey,
+  ): Promise<ArrayBuffer> {
+    const data = new Uint8Array(encrypted_data);
+    const iv = data.slice(0, 12); // Extract IV
+    const encrypted = data.slice(12); // Extract encrypted data
+
+    const key =
+      raw_key instanceof ArrayBuffer
+        ? await crypto.subtle.importKey(
+            "raw",
+            raw_key,
+            { name: "AES-GCM" },
+            false,
+            ["decrypt"],
+          )
+        : raw_key;
+
+    return crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, encrypted);
+  }
+
+  static generate_salt(length = 32): ArrayBuffer {
+    const salt = new Uint8Array(length);
+    crypto.getRandomValues(salt);
+    return salt.buffer;
+  }
+
+  static async _generate_swarm_key(): Promise<ArrayBuffer> {
+    const key = await crypto.subtle.generateKey(
+      {
+        name: "AES-GCM",
+        length: 256,
+      },
+      true, // extractable
+      ["encrypt", "decrypt"],
+    );
+
+    const raw = await crypto.subtle.exportKey("raw", key);
+    return raw;
   }
 }
