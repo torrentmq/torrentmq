@@ -1,4 +1,3 @@
-import { TorrentEmitter } from "./torrent-emitter";
 import { TorrentIdentity } from "./torrent-identity";
 import { TorrentMessage } from "./torrent-message";
 import { TorrentSeeder } from "./torrent-seeder";
@@ -10,10 +9,11 @@ import {
   TorrentHostedObj,
   TorrentMessageBody,
   TorrentMessageParams,
+  TorrentSeederFurrowSecurityObject,
 } from "./torrent-types";
 import { TorrentUtils } from "./torrent-utils";
 
-export class TorrentFurrow extends TorrentEmitter<"initialized"> {
+export class TorrentFurrow {
   identifier: string;
   is_root: boolean = true;
   is_planted: boolean | "unset" = "unset";
@@ -25,18 +25,19 @@ export class TorrentFurrow extends TorrentEmitter<"initialized"> {
   readonly name: string;
   readonly options: TorrentFurrowParams;
 
-  constructor(
+  private constructor(
     seeder: TorrentSeeder,
-    arg1?: string | TorrentFurrowParams,
-    arg2?: string | TorrentFurrowParams,
+    arg1?: string | TorrentFurrowParams | TorrentSeederFurrowSecurityObject,
+    arg2?: string | TorrentFurrowParams | TorrentSeederFurrowSecurityObject,
+    arg3?: string | TorrentFurrowParams | TorrentSeederFurrowSecurityObject,
   ) {
-    super();
-
     let name: string | undefined;
     let options: TorrentFurrowParams | undefined;
+    let security: TorrentSeederFurrowSecurityObject | undefined;
 
-    for (const arg of [arg1, arg2]) {
+    for (const arg of [arg1, arg2, arg3]) {
       if (typeof arg === "string") name = arg;
+      else if (TorrentUtils.is_security_object(arg)) security = arg;
       else if (arg) options = arg;
     }
 
@@ -44,33 +45,14 @@ export class TorrentFurrow extends TorrentEmitter<"initialized"> {
     this.name = name ?? TorrentUtils.random_string();
     this.options = options ?? {};
 
-    TorrentIdentity.create().then((identity) => {
+    if (security) {
+      const { identity, identifier, pub_key, swarm_key } = security;
+
       this.identity = identity;
-      identity.get_identifier().then((id) => {
-        this.identifier = id;
-
-        identity.export_public_jwk().then((jwk) => {
-          this.pub_key = jwk;
-
-          TorrentUtils._generate_swarm_key().then((key) => {
-            this.swarm_key = key;
-
-            this.seeder.peer.find(
-              {
-                id: this.seeder.identifier,
-                name: this.seeder.name,
-              },
-              {
-                id,
-                name: this.name,
-              },
-            );
-
-            this.emit("initialized");
-          });
-        });
-      });
-    });
+      this.identifier = identifier;
+      this.pub_key = pub_key;
+      this.swarm_key = swarm_key;
+    }
 
     this.seeder.peer.on<{
       seeder: TorrentHostedObj & { swarm_key: ArrayBuffer };
@@ -89,8 +71,48 @@ export class TorrentFurrow extends TorrentEmitter<"initialized"> {
       this.swarm_key = data.furrow.swarm_key;
       this.is_root = false;
     });
+  }
 
-    return this;
+  static async create(
+    seeder: TorrentSeeder,
+    arg1?: string | TorrentFurrowParams,
+    arg2?: string | TorrentFurrowParams,
+  ) {
+    let name: string | undefined;
+    let options: TorrentFurrowParams | undefined;
+
+    for (const arg of [arg1, arg2]) {
+      if (typeof arg === "string") name = arg;
+      else if (arg) options = arg;
+    }
+
+    name = name ?? TorrentUtils.random_string();
+
+    const identity: TorrentIdentity = await TorrentIdentity.create();
+    const identifier: string = await identity.get_identifier();
+    const pub_key: JsonWebKey = await identity.export_public_jwk();
+    const swarm_key: ArrayBuffer = await TorrentUtils._generate_swarm_key();
+    const security_obj: TorrentSeederFurrowSecurityObject = {
+      identifier,
+      identity,
+      pub_key,
+      swarm_key,
+    };
+
+    const furrow = new TorrentFurrow(seeder, name, options, security_obj);
+
+    seeder.peer.find(
+      {
+        id: seeder.identifier,
+        name: seeder.name,
+      },
+      {
+        id: identifier,
+        name,
+      },
+    );
+
+    return furrow;
   }
 
   send(

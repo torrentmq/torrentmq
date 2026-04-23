@@ -73,7 +73,7 @@ export class TorrentPeer extends TorrentDHTNode {
 
   // User methods
 
-  seeder(
+  async seeder(
     arg1?: string | TorrentSeederParams,
     arg2?: string | TorrentSeederParams,
   ) {
@@ -90,21 +90,19 @@ export class TorrentPeer extends TorrentDHTNode {
       if (typeof arg2 === "string") name = arg2;
     }
 
-    const seeder = new TorrentSeeder(this, name, options);
+    const seeder = await TorrentSeeder.create(this, name, options);
     this.seeders.push(seeder);
 
-    seeder.on("initialized", () => {
-      const pub_key = seeder.pub_key;
-      const cert = seeder.cert ?? undefined;
+    const pub_key = seeder.pub_key;
+    const cert = seeder.cert ?? undefined;
 
-      this._add_to_hosted({
-        id: seeder.identifier,
-        name: seeder.name,
-        ...(cert ? { cert } : { pub_key }),
-        ...(options && Object.keys(options).length > 0
-          ? { properties: { ...options } }
-          : {}),
-      });
+    this._add_to_hosted({
+      id: seeder.identifier,
+      name: seeder.name,
+      ...(cert ? { cert } : { pub_key }),
+      ...(options && Object.keys(options).length > 0
+        ? { properties: { ...options } }
+        : {}),
     });
 
     seeder.on<{
@@ -206,7 +204,7 @@ export class TorrentPeer extends TorrentDHTNode {
 
   register_remote_binding(
     seeder: TorrentControlSeeder,
-    furrow?: TorrentControlBindFurrow,
+    furrow: TorrentControlBindFurrow,
   ) {
     this._bind_seeder_or_furrow(seeder, furrow);
 
@@ -224,7 +222,7 @@ export class TorrentPeer extends TorrentDHTNode {
 
   unregister_remote_binding(
     seeder: TorrentControlSeeder,
-    furrow?: TorrentControlBindFurrow,
+    furrow: TorrentControlBindFurrow,
   ) {
     this._unbind_seeder_or_furrow(seeder, furrow);
 
@@ -242,7 +240,9 @@ export class TorrentPeer extends TorrentDHTNode {
 
   //  NOTE: All control traffic to DCs only. WebSocket signaling is used only for HELO/OFFER/ANSWER/ICE.
   private _broadcast_control(
-    control: Omit<TorrentControlMessage, "control_id" | "artifacts">,
+    control: Omit<TorrentControlMessage, "control_id" | "artifacts"> & {
+      control_id?: TorrentControlMessage["control_id"];
+    },
     to_peer_id?: string,
   ) {
     this._add_message_artifacts(control).then((artifacted_control) => {
@@ -272,7 +272,11 @@ export class TorrentPeer extends TorrentDHTNode {
         }
       else
         // use the weighted k-best forwarding alg
-        this._forward_msg(artifacted_control).then();
+        this._forward_msg(artifacted_control);
+
+      // store the message
+      if (!this.data_store.has(artifacted_control.control_id))
+        this.store(artifacted_control);
     });
   }
 
@@ -280,6 +284,13 @@ export class TorrentPeer extends TorrentDHTNode {
     control: TorrentControlMessage,
     from_peer_id?: string,
   ) {
+    // NOTE: de-dup bullshit
+    // ignore if message from self
+    if (control.from === this.identifier) return;
+    // already processed, skip entirely
+    if (this.data_store.has(control.control_id)) return;
+    if (control.to && control.to !== this.identifier) return;
+
     // ensure peer entry has bb map
     const peer = this.connected_peers.get(from_peer_id ?? control.from);
     if (peer && !peer.bb) peer.bb = new Map();
@@ -393,6 +404,22 @@ export class TorrentPeer extends TorrentDHTNode {
         this._handle_eph_exchange(control);
         break;
       }
+
+      case "LRU_STORE": {
+        this._handle_lru_store(control);
+        break;
+      }
+    }
+
+    // store in the data store so is ignored if re_delivered
+    if (
+      control.type !== "LRU_STORE" &&
+      !this.data_store.has(control.control_id)
+    ) {
+      // always naively forward if not publish type
+      // only forward if not seen before or sent by us
+      if (control.type !== "PUBLISH") this._forward_msg_naive(control);
+      this.store(control);
     }
   }
 
@@ -404,10 +431,7 @@ export class TorrentPeer extends TorrentDHTNode {
 
     // already processed, skip entirely
     if (this.data_store.has(msg.control_id)) return;
-    this.store(msg);
-
-    this._forward_msg(msg).then();
-
+    this._forward_msg(msg);
     // Local routing: accept message if routing_key matches this.identifier or empty
     const routing_key = msg.message?.properties?.routing_key ?? "";
 
@@ -462,6 +486,9 @@ export class TorrentPeer extends TorrentDHTNode {
     msg: Extract<TorrentControlMessage, { type: "SUBMIT" }>,
   ) {
     if (msg.from === this.identifier) return;
+    // already processed, skip entirely
+    if (this.data_store.has(msg.control_id)) return;
+
     const { seeder: found_seeder, furrow: found_furrow } = this._search_hosted(
       msg.seeder,
       msg?.furrow,
@@ -525,8 +552,7 @@ export class TorrentPeer extends TorrentDHTNode {
 
         // send to ourselves???
         this._handle_receive(_control);
-
-        this._forward_msg(_control).then();
+        this._forward_msg(_control);
       });
     });
   }
@@ -682,50 +708,68 @@ export class TorrentPeer extends TorrentDHTNode {
     );
   }
 
-  private async _forward_msg(
+  private _handle_lru_store(
+    msg: Extract<TorrentControlMessage, { type: "LRU_STORE" }>,
+  ) {
+    if (msg.to !== this.identifier) return;
+    const { message: control } = msg;
+    if (this.data_store.has(control.control_id)) return;
+    this.store(control);
+  }
+
+  private _forward_msg_naive(control: TorrentControlMessage) {
+    if (this.data_store.has(control.control_id)) return;
+
+    for (const [, entry] of this.connected_peers) {
+      if (entry.dc && entry.dc.readyState === "open") {
+        try {
+          entry.dc.send(JSON.stringify(control));
+        } catch (e) {
+          console.warn("failed to broadcast control to peer", e);
+        }
+      }
+    }
+  }
+
+  private _forward_msg(
     control: Extract<TorrentControlMessage, { type: "PUBLISH" }>,
   ) {
-    const id = control.control_id;
-
-    if (!id) return;
-    if (this.data_store.has(id)) return;
+    if (this.data_store.has(control.control_id)) return;
     this.store(control);
 
-    this._calculate_candidates(control).then(
-      (res: { peer_id: string; ema: number }[]) => {
-        for (const { peer_id } of res) {
-          const entry = this.connected_peers.get(peer_id);
-          if (!entry?.dc) continue;
-          if (entry.dc && entry.dc.readyState === "open") {
-            const new_control: TorrentControlMessage = {
-              ...control,
-              ...(control?.message
-                ? {
-                    message: {
-                      ...control.message,
-                      properties: {
-                        ...control.message?.properties,
-                        headers: {
-                          ...control.message?.properties?.headers,
-                          hop_count:
-                            (control.message?.properties?.headers?.hop_count ??
-                              0) + 1,
-                        },
-                      },
-                    },
-                  }
-                : {}),
-            };
+    const best_candidates = this._calculate_candidates();
 
-            try {
-              entry.dc.send(JSON.stringify(new_control));
-            } catch (e) {
-              console.warn("failed to broadcast control to peer", e);
-            }
-          }
+    for (const { peer_id } of best_candidates) {
+      const entry = this.connected_peers.get(peer_id);
+      if (!entry?.dc) continue;
+      if (entry.dc && entry.dc.readyState === "open") {
+        const new_control: TorrentControlMessage = {
+          ...control,
+          ...(control?.message
+            ? {
+                message: {
+                  ...control.message,
+                  properties: {
+                    ...control.message?.properties,
+                    headers: {
+                      ...control.message?.properties?.headers,
+                      hop_count:
+                        (control.message?.properties?.headers?.hop_count ?? 0) +
+                        1,
+                    },
+                  },
+                },
+              }
+            : {}),
+        };
+
+        try {
+          entry.dc.send(JSON.stringify(new_control));
+        } catch (e) {
+          console.warn("failed to broadcast control to peer", e);
         }
-      },
-    );
+      }
+    }
   }
 
   private _split_candidates(
@@ -742,40 +786,13 @@ export class TorrentPeer extends TorrentDHTNode {
   // It seems that A* makes no sense for this.
   // Will be pivoting to Weighted K-Best Forwarding (W-KBF)
   // Which is a more efficient version of flodding.
-  private async _calculate_candidates(
-    control: Extract<TorrentControlMessage, { type: "PUBLISH" }>,
-  ): Promise<{ peer_id: string; ema: number }[]> {
-    const seen = new Set<string>();
-    const candidates: Array<{ peer_id: string; ema: number }> = [];
-    const { seeder, furrow } = control;
-
-    for (const [peer_id, entry] of this.connected_peers) {
-      if (entry.bb) {
-        let matched = false;
-        for (const [seeder_entry, furrow_set] of entry.bb) {
-          const [, real_name] = seeder_entry;
-          if (real_name !== seeder.name) continue;
-
-          if (furrow) {
-            const req_furrow_name = furrow.name;
-            for (const [, real_furrow_name] of furrow_set) {
-              if (real_furrow_name === req_furrow_name) {
-                matched = true;
-                break;
-              }
-            }
-          } else {
-            matched = true;
-          }
-          if (matched) break;
-        }
-        if (matched && !seen.has(peer_id)) {
-          entry.stats = entry.stats || {};
-          candidates.push({ peer_id, ema: entry.stats.distance ?? Infinity });
-          seen.add(peer_id);
-        }
-      }
-    }
+  private _calculate_candidates(): { peer_id: string; ema: number }[] {
+    const candidates: Array<{ peer_id: string; ema: number }> = Array.from(
+      this.connected_peers.entries(),
+    ).map(([peer_id, entry]) => ({
+      peer_id,
+      ema: entry?.stats?.distance ?? Infinity,
+    }));
 
     const k_max = Math.ceil(Math.sqrt(candidates.length));
     const k = Math.min(k_max, candidates.length);
@@ -787,6 +804,8 @@ export class TorrentPeer extends TorrentDHTNode {
   // TODO: implement load balancing for sharing seeders
   // multiple peers hosting the same seeder but only part of it e.g. one furrow
   // private async _load_balance_control() {}
+  //
+  // 3/4/2026: what was that guy thinking?
 
   private _search_hosted(
     seeder: TorrentControlSeederOrFurrow,
@@ -816,7 +835,9 @@ export class TorrentPeer extends TorrentDHTNode {
   }
 
   private async _add_message_artifacts(
-    control: Omit<TorrentControlMessage, "control_id" | "artifacts">,
+    control: Omit<TorrentControlMessage, "control_id" | "artifacts"> & {
+      control_id?: TorrentControlMessage["control_id"];
+    },
   ) {
     if (
       control.type !== "ANNOUNCE_BIND" &&
@@ -830,7 +851,7 @@ export class TorrentPeer extends TorrentDHTNode {
 
       return {
         ...control,
-        control_id: TorrentUtils.random_string(),
+        control_id: control?.control_id ?? TorrentUtils.random_string(),
         artifacts: {
           pub_key,
           signature: TorrentUtils.to_base64_url(signature),
@@ -841,7 +862,7 @@ export class TorrentPeer extends TorrentDHTNode {
 
     return {
       ...control,
-      control_id: TorrentUtils.random_string(),
+      control_id: control?.control_id ?? TorrentUtils.random_string(),
     } as TorrentControlMessage;
   }
 

@@ -1,8 +1,16 @@
+import { TorrentIdentity } from "./torrent-identity";
 import { TorrentMessage } from "./torrent-message";
 
 export type TorrentPeerHostingSize = {
   number_of_seeders: number;
   number_of_furrows_per_seeder: number;
+};
+
+export type TorrentSeederFurrowSecurityObject = {
+  identifier: string;
+  identity: TorrentIdentity;
+  pub_key: JsonWebKey;
+  swarm_key: ArrayBuffer;
 };
 
 type SeederFurrowSharedParams = {
@@ -192,7 +200,14 @@ export type TorrentControlMessage =
         aes_salt: string;
         swarm_key: string;
       };
-    });
+    })
+  | {
+      control_id: string;
+      from: string;
+      to: string;
+      type: "LRU_STORE";
+      message: TorrentControlMessage;
+    };
 
 export type TorrentSignalMessage =
   | { type: "HELO"; from: string }

@@ -35,6 +35,8 @@ export class TorrentDHTNode extends TorrentEmitter<
   // how often to get status in ms
   readonly status_frequency_check: number = 15000;
 
+  protected last_partition_heal: number = Date.now();
+
   constructor(options?: {
     ws_url?: string;
     min_peer_cluster_size?: number;
@@ -93,24 +95,15 @@ export class TorrentDHTNode extends TorrentEmitter<
     });
 
     setInterval(() => {
-      // clean up dead peers
-      // carry out before size checks to ensure
-      // a. YOYO messages are sent to connect to new peers
-      // b. avoid removing some connected peers with data channels
-      const peers_to_close: string[] = [];
-
-      for (const [peer_id, peer] of this.connected_peers) {
-        if (!peer.dc || peer.dc.readyState !== "open") {
-          peers_to_close.push(peer_id);
-        }
-      }
-
-      peers_to_close.forEach((peer_id) => this.close_peer_connection(peer_id));
-
       if (this.connected_peers.size < this.min_peer_cluster_size)
         // request YOYO from signaller or reconnect to random known peer
         this.signaller.send({ type: "YOYO", from: this.identifier });
+
+      // only evict when "healing"
+      // ik this is optimisation and not "healing" but fuck it
       this._evict_worst_peer();
+
+      this.last_partition_heal = Date.now();
     }, this.partition_heal_interval);
 
     setInterval(() => {
@@ -157,9 +150,8 @@ export class TorrentDHTNode extends TorrentEmitter<
   }
 
   store(data: TorrentControlMessage) {
-    if (this.identifier !== data.from)
-      this.data_store.set(data.control_id, data);
-    this.replicate_data(data);
+    // if (this.identifier !== data.from)
+    this.data_store.set(data.control_id, data);
   }
 
   retrieve(key: string) {
@@ -167,10 +159,30 @@ export class TorrentDHTNode extends TorrentEmitter<
     else return null;
   }
 
-  replicate_data(data: TorrentControlMessage) {
+  sync(to_peer_id: string) {
+    const peer = this.connected_peers.get(to_peer_id);
+    if (!peer) return;
+
+    for (const [, lru_node] of this.data_store.get_map()) {
+      const lru_msg: Extract<TorrentControlMessage, { type: "LRU_STORE" }> = {
+        control_id: TorrentUtils.random_string(),
+        type: "LRU_STORE",
+        from: this.identifier,
+        to: to_peer_id,
+        message: lru_node.value,
+      };
+
+      if (peer.dc && peer.dc.readyState === "open")
+        peer.dc.send(JSON.stringify(lru_msg));
+    }
+  }
+
+  replicate_data(data: TorrentControlMessage, to_peer_id?: string) {
     this.connected_peers.forEach((peer) => {
       if (peer.dc && peer.dc.readyState === "open")
-        peer.dc.send(JSON.stringify(data));
+        peer.dc.send(
+          JSON.stringify({ type: "LRU_STORE", to: to_peer_id, message: data }),
+        );
     });
   }
 
@@ -324,6 +336,9 @@ export class TorrentDHTNode extends TorrentEmitter<
         }
       }
 
+      // sync our messages only when a connection is intialised
+      this.sync(remote_id);
+
       // notify listeners
       this.emit("peer_connected", { peer_id: remote_id, dc });
     };
@@ -342,6 +357,7 @@ export class TorrentDHTNode extends TorrentEmitter<
     };
 
     dc.onclose = () => {
+      // clean up dead peers
       this.connected_peers.delete(remote_id);
       this.peer_graph.delete(remote_id);
       this.emit("peer_disconnected", { peer_id: remote_id });
@@ -587,9 +603,6 @@ export class TorrentDHTNode extends TorrentEmitter<
     // if we already have a connection to them, ignore
     if (from === this.identifier) return;
     if (this.connected_peers.has(from)) return;
-    // dont add new peers when at max
-    // disconnect if over max
-    this._evict_worst_peer();
 
     if (this.connected_peers.size < this.max_peer_cluster_size) {
       // they might not have discovered this peer so say "HIHI"
@@ -618,8 +631,6 @@ export class TorrentDHTNode extends TorrentEmitter<
     // if we already have a connection to them, ignore
     if (from === this.identifier) return;
     if (this.connected_peers.has(from)) return;
-
-    this._evict_worst_peer();
 
     if (this.connected_peers.size < this.max_peer_cluster_size) {
       // they might not have discovered this peer so say "YOYO"
@@ -720,6 +731,8 @@ export class TorrentDHTNode extends TorrentEmitter<
 
   // use Exponential Moving Average (EMA) as distance
   private _ema_distance(prev_distance: number, cost: number, alpha = 0.1) {
+    // honestly no clue what this is
+    // but it is here and and that is what matters
     return alpha * cost + (1 - alpha) * prev_distance;
   }
 

@@ -1,6 +1,7 @@
 import { TorrentError } from "./torrent-error";
 import {
   Node,
+  TorrentSeederFurrowSecurityObject,
   TorrentDeserializableBindingObjOf,
   TorrentDeserializableHostedObjOf,
   TorrentHostedBrand,
@@ -40,6 +41,19 @@ export class TorrentUtils {
       arg !== null &&
       typeof arg === "object" &&
       ("routing_key" in arg || "on_ack" in arg)
+    );
+  }
+
+  static is_security_object(
+    arg: unknown,
+  ): arg is TorrentSeederFurrowSecurityObject {
+    return (
+      arg !== null &&
+      typeof arg === "object" &&
+      ("identity" in arg ||
+        "identifier" in arg ||
+        "pub_key" in arg ||
+        "swarm_key" in arg)
     );
   }
 

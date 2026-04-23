@@ -90,4 +90,8 @@ export class TorrentLRUCache<K, V> {
       this.map.delete(lru.key);
     }
   }
+
+  get_map() {
+    return this.map;
+  }
 }
