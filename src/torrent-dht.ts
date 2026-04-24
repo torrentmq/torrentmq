@@ -181,7 +181,13 @@ export class TorrentDHTNode extends TorrentEmitter<
     this.connected_peers.forEach((peer) => {
       if (peer.dc && peer.dc.readyState === "open")
         peer.dc.send(
-          JSON.stringify({ type: "LRU_STORE", to: to_peer_id, message: data }),
+          JSON.stringify({
+            control_id: TorrentUtils.random_string(),
+            type: "LRU_STORE",
+            from: this.identifier,
+            to: to_peer_id,
+            message: data,
+          }),
         );
     });
   }

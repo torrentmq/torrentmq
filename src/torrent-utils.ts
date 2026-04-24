@@ -122,14 +122,21 @@ export class TorrentUtils {
           return { t: "date", v: val.toISOString(), id: ref_id };
         if (val instanceof RegExp)
           return { t: "regex", v: [val.source, val.flags], id: ref_id };
-        if (val instanceof Map)
+        if (val instanceof Map) {
+          const entries = Array.from(val.entries()).sort((a, b) => {
+            return String(a[0]).localeCompare(String(b[0]));
+          });
+
           return {
             t: "map",
-            v: Array.from(val.entries(), ([k, v]) => [encode(k), encode(v)]),
+            v: entries.map(([k, v]) => [encode(k), encode(v)]),
             id: ref_id,
           };
-        if (val instanceof Set)
-          return { t: "set", v: Array.from(val, encode), id: ref_id };
+        }
+        if (val instanceof Set) {
+          const sorted_values = Array.from(val).sort().map(encode);
+          return { t: "set", v: sorted_values, id: ref_id };
+        }
         if (ArrayBuffer.isView(val))
           return {
             t: "typed",
@@ -147,7 +154,8 @@ export class TorrentUtils {
           return { t: "arr", v: val.map(encode), id: ref_id };
 
         const obj: Record<string, Node> = {};
-        for (const k in val as any)
+        const sorted_keys = Object.keys(val as object).sort();
+        for (const k of sorted_keys)
           obj[k] = encode((val as Record<string, unknown>)[k]);
         return { t: "obj", v: obj, id: ref_id };
       }
@@ -156,7 +164,7 @@ export class TorrentUtils {
     }
 
     const json = JSON.stringify(encode(value));
-    return new TextEncoder().encode(json).buffer;
+    return this.encoder.encode(json).buffer;
   }
 
   static from_array_buffer<T = unknown>(buffer: ArrayBuffer): T {

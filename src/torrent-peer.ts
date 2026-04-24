@@ -240,9 +240,7 @@ export class TorrentPeer extends TorrentDHTNode {
 
   //  NOTE: All control traffic to DCs only. WebSocket signaling is used only for HELO/OFFER/ANSWER/ICE.
   private _broadcast_control(
-    control: Omit<TorrentControlMessage, "control_id" | "artifacts"> & {
-      control_id?: TorrentControlMessage["control_id"];
-    },
+    control: Omit<TorrentControlMessage, "control_id" | "artifacts">,
     to_peer_id?: string,
   ) {
     this._add_message_artifacts(control).then((artifacted_control) => {
@@ -280,9 +278,9 @@ export class TorrentPeer extends TorrentDHTNode {
     });
   }
 
-  private _handle_control_message(
+  private async _handle_control_message(
     control: TorrentControlMessage,
-    from_peer_id?: string,
+    remote_id?: string,
   ) {
     // NOTE: de-dup bullshit
     // ignore if message from self
@@ -291,76 +289,89 @@ export class TorrentPeer extends TorrentDHTNode {
     if (this.data_store.has(control.control_id)) return;
     if (control.to && control.to !== this.identifier) return;
 
-    // ensure peer entry has bb map
-    const peer = this.connected_peers.get(from_peer_id ?? control.from);
-    if (peer && !peer.bb) peer.bb = new Map();
-
     switch (control.type) {
       case "ANNOUNCE_BIND": {
-        if (!peer?.bb) break;
-        const seeder_key: TorrentSeederBindingObj = {
-          id: control.seeder.id,
-          name: control.seeder.name,
-        };
-        let furrow_set = peer.bb.get(this.utils.serialize_binding(seeder_key));
-
-        if (!furrow_set) {
-          // If no furrows are bound to this seeder yet, create a new Set
-          furrow_set = new Set();
-          peer.bb.set(this.utils.serialize_binding(seeder_key), furrow_set);
-        }
-
-        // If a furrow is provided, add the furrow to the set for this seeder
-        if (control.furrow?.id && control.furrow?.name) {
-          const furrow_key: TorrentFurrowBindingObj = {
-            id: control.furrow.id,
-            name: control.furrow.name,
-            routing_key:
-              control.furrow.routing_key ?? from_peer_id ?? control.from,
-          };
-          furrow_set.add(this.utils.serialize_binding(furrow_key));
-        }
-
-        this.emit("peer_bind", {
-          seeder: control.seeder,
-          furrow: control.furrow,
-          peer_id: from_peer_id,
-        });
+        this._handle_bind(control);
         break;
       }
 
       case "ANNOUNCE_UNBIND": {
-        if (!peer?.bb) break;
-        const seeder_key: TorrentSeederBindingObj = {
-          id: control.seeder.id,
-          name: control.seeder.name,
-        };
-        let furrow_set = peer.bb.get(this.utils.serialize_binding(seeder_key));
-
-        if (!furrow_set && control.furrow) break;
-        if (control.furrow?.id && control.furrow?.name) {
-          const furrow_key: TorrentFurrowBindingObj = {
-            id: control.furrow.id,
-            name: control.furrow.name,
-            routing_key:
-              control.furrow.routing_key ?? from_peer_id ?? control.from ?? "",
-          };
-          // Remove furrow
-          furrow_set?.delete(this.utils.serialize_binding(furrow_key));
-        }
-        if (!control.furrow) {
-          // Remove seeder
-          peer.bb.delete(this.utils.serialize_binding(seeder_key));
-        }
-
-        this.emit("peer_unbind", {
-          seeder: control.seeder,
-          furrow: control.furrow,
-          peer_id: from_peer_id,
-        });
+        this._handle_unbind(control);
         break;
       }
 
+      case "LRU_STORE": {
+        this._handle_lru_store(control);
+        break;
+      }
+
+      case "PUBLISH":
+      case "SUBMIT":
+      case "ACK":
+      case "FIND":
+      case "FOUND":
+      case "NOT_FOUND":
+      case "EPH_KEY_OFFER":
+      case "EPH_KEY_EXCHANGE": {
+        await this._handle_signed_control_msg(control, remote_id);
+        break;
+      }
+    }
+
+    // store in the data store so is ignored if re_delivered
+    if (
+      control.type !== "LRU_STORE" &&
+      !this.data_store.has(control.control_id)
+    ) {
+      // always naively forward if not publish type
+      // only forward if not seen before or sent by us
+      if (control.type !== "PUBLISH") this._forward_msg_naive(control);
+      this.store(control);
+    }
+  }
+
+  private async _handle_signed_control_msg(
+    control: Extract<
+      TorrentControlMessage,
+      {
+        type: Exclude<
+          TorrentControlMessage["type"],
+          "ANNOUNCE_BIND" | "ANNOUNCE_UNBIND" | "LRU_STORE"
+        >;
+      }
+    >,
+    remote_id?: string,
+  ) {
+    const temp_control = control;
+    // reset hop count for message verification
+    if (temp_control.type === "PUBLISH")
+      temp_control.message = {
+        ...temp_control.message,
+        properties: {
+          ...temp_control.message.properties,
+          headers: {
+            ...temp_control.message?.properties?.headers,
+            hop_count: 0,
+          },
+        },
+      };
+    const { control_id, artifacts, ...msg_body } = temp_control;
+    const msg_bytes = TorrentUtils.to_array_buffer(msg_body);
+
+    console.log({
+      msg_body,
+      msg_buffer: msg_bytes,
+      sig: artifacts.signature,
+    });
+
+    const valid = await TorrentIdentity.verify(
+      msg_bytes,
+      TorrentUtils.from_base64_url(artifacts.signature),
+      artifacts.pub_key,
+    );
+    if (!valid) return;
+
+    switch (control.type) {
       case "PUBLISH": {
         this._handle_receive(control);
         break;
@@ -375,7 +386,7 @@ export class TorrentPeer extends TorrentDHTNode {
         // TODO: ack handling (deliver to on_ack callbacks)
         this.emit("ack", {
           message_id: control.message_id,
-          peer_id: from_peer_id,
+          peer_id: remote_id,
         });
         break;
       }
@@ -404,23 +415,81 @@ export class TorrentPeer extends TorrentDHTNode {
         this._handle_eph_exchange(control);
         break;
       }
+    }
+  }
 
-      case "LRU_STORE": {
-        this._handle_lru_store(control);
-        break;
+  private _handle_bind(
+    msg: Extract<TorrentControlMessage, { type: "ANNOUNCE_BIND" }>,
+  ) {
+    // ensure peer entry has bb map
+    const peer = this.connected_peers.get(msg.from);
+    if (peer && !peer.bb) peer.bb = new Map();
+    if (!peer?.bb) return;
+
+    const seeder_key: TorrentSeederBindingObj = {
+      id: msg.seeder.id,
+      name: msg.seeder.name,
+    };
+    let furrow_set = peer.bb.get(this.utils.serialize_binding(seeder_key));
+
+    if (!furrow_set) {
+      // If no furrows are bound to this seeder yet, create a new Set
+      furrow_set = new Set();
+      peer.bb.set(this.utils.serialize_binding(seeder_key), furrow_set);
+    }
+
+    // If a furrow is provided, add the furrow to the set for this seeder
+    if (msg.furrow?.id && msg.furrow?.name) {
+      const furrow_key: TorrentFurrowBindingObj = {
+        id: msg.furrow.id,
+        name: msg.furrow.name,
+        routing_key: msg.furrow.routing_key ?? msg.from,
+      };
+
+      furrow_set.add(this.utils.serialize_binding(furrow_key));
+    }
+
+    this.emit("peer_bind", {
+      seeder: msg.seeder,
+      furrow: msg.furrow,
+      peer_id: msg.from,
+    });
+  }
+
+  private _handle_unbind(
+    msg: Extract<TorrentControlMessage, { type: "ANNOUNCE_UNBIND" }>,
+  ) {
+    // ensure peer entry has bb map
+    const peer = this.connected_peers.get(msg.from);
+    if (peer && !peer.bb) peer.bb = new Map();
+    if (!peer?.bb) return;
+
+    const seeder_key: TorrentSeederBindingObj = {
+      id: msg.seeder.id,
+      name: msg.seeder.name,
+    };
+    let furrow_set = peer.bb.get(this.utils.serialize_binding(seeder_key));
+
+    if (furrow_set && msg.furrow)
+      if (msg.furrow?.id && msg.furrow?.name) {
+        const furrow_key: TorrentFurrowBindingObj = {
+          id: msg.furrow.id,
+          name: msg.furrow.name,
+          routing_key: msg.furrow.routing_key ?? msg.from ?? "",
+        };
+        // Remove furrow
+        furrow_set?.delete(this.utils.serialize_binding(furrow_key));
       }
-    }
 
-    // store in the data store so is ignored if re_delivered
-    if (
-      control.type !== "LRU_STORE" &&
-      !this.data_store.has(control.control_id)
-    ) {
-      // always naively forward if not publish type
-      // only forward if not seen before or sent by us
-      if (control.type !== "PUBLISH") this._forward_msg_naive(control);
-      this.store(control);
-    }
+    if (!msg.furrow)
+      // Remove seeder
+      peer.bb.delete(this.utils.serialize_binding(seeder_key));
+
+    this.emit("peer_unbind", {
+      seeder: msg.seeder,
+      furrow: msg.furrow,
+      peer_id: msg.from,
+    });
   }
 
   private _handle_receive(
@@ -835,23 +904,28 @@ export class TorrentPeer extends TorrentDHTNode {
   }
 
   private async _add_message_artifacts(
-    control: Omit<TorrentControlMessage, "control_id" | "artifacts"> & {
-      control_id?: TorrentControlMessage["control_id"];
-    },
+    control: Omit<TorrentControlMessage, "control_id" | "artifacts">,
   ) {
+    // "Wash" the message to remove undefineds and normalize types
+    const cleaned_control = JSON.parse(JSON.stringify(control));
+
     if (
       control.type !== "ANNOUNCE_BIND" &&
       control.type !== "ANNOUNCE_UNBIND"
     ) {
-      const msg_bytes = await this.identity.sign(
-        TorrentUtils.to_array_buffer(control),
-      );
+      const msg_bytes = TorrentUtils.to_array_buffer(cleaned_control);
       const signature = await this.identity.sign(msg_bytes);
       const pub_key = await this.identity.export_public_jwk();
 
+      console.log({
+        msg_body: cleaned_control,
+        msg_buffer: msg_bytes,
+        sig: TorrentUtils.to_base64_url(signature),
+      });
+
       return {
-        ...control,
-        control_id: control?.control_id ?? TorrentUtils.random_string(),
+        ...cleaned_control,
+        control_id: TorrentUtils.random_string(),
         artifacts: {
           pub_key,
           signature: TorrentUtils.to_base64_url(signature),
@@ -861,8 +935,8 @@ export class TorrentPeer extends TorrentDHTNode {
     }
 
     return {
-      ...control,
-      control_id: control?.control_id ?? TorrentUtils.random_string(),
+      ...cleaned_control,
+      control_id: TorrentUtils.random_string(),
     } as TorrentControlMessage;
   }
 
