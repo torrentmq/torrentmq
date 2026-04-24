@@ -17,6 +17,7 @@ type SeederFurrowSharedParams = {
   passive?: boolean;
   durable?: boolean;
   auto_delete?: boolean;
+  key_refresh?: number;
 };
 
 export type TorrentSeederParams = SeederFurrowSharedParams & {
@@ -184,6 +185,8 @@ export type TorrentControlMessage =
   // key shit for exchange (seeder <-> peer)
   // routes through the peere hosting the seeder
   // it'll be a miracle if this works
+  // 24th April 2026 : it did fucking work, lol
+  | (TorrentControlPeerInfo & { type: "SWARM_KEY_REFRESH" })
   | (TorrentControlPeerInfo & {
       type: "EPH_KEY_OFFER";
       eph_pub_key: string;

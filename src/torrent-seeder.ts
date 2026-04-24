@@ -27,6 +27,9 @@ export class TorrentSeeder extends TorrentEmitter<"created_furrow"> {
   identity: TorrentIdentity;
   swarm_key: ArrayBuffer;
 
+  protected last_key_refresh: number = Date.now();
+  private key_refresh_interval: ReturnType<typeof setInterval> | null = null;
+
   readonly name: string;
   readonly options: TorrentSeederParams;
 
@@ -60,6 +63,25 @@ export class TorrentSeeder extends TorrentEmitter<"created_furrow"> {
       this.pub_key = pub_key;
       this.swarm_key = swarm_key;
     }
+
+    this.key_refresh_interval = setInterval(() => {
+      if (!this.is_root) {
+        this.stop_key_refresh();
+        return;
+      }
+
+      TorrentUtils._generate_swarm_key().then((key) => {
+        this.swarm_key = key;
+
+        this.peer.swarm_key_refresh({
+          id: this.identifier,
+          name: this.name,
+          pub_key: this.pub_key,
+        });
+
+        this.last_key_refresh = Date.now();
+      });
+    }, this.options.key_refresh ?? 600000);
 
     this.peer.on<{
       seeder: TorrentHostedObj & { swarm_key: ArrayBuffer };
@@ -219,5 +241,12 @@ export class TorrentSeeder extends TorrentEmitter<"created_furrow"> {
 
   get_swarm_key() {
     return this.swarm_key;
+  }
+
+  private stop_key_refresh() {
+    if (this.key_refresh_interval) {
+      clearInterval(this.key_refresh_interval);
+      this.key_refresh_interval = null;
+    }
   }
 }

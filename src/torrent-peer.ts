@@ -208,9 +208,11 @@ export class TorrentPeer extends TorrentDHTNode {
   ) {
     this._bind_seeder_or_furrow(seeder, furrow);
 
-    const control: TorrentControlMessage = {
+    const control: Omit<
+      Extract<TorrentControlMessage, { type: "ANNOUNCE_BIND" }>,
+      "control_id"
+    > = {
       type: "ANNOUNCE_BIND",
-      control_id: TorrentUtils.random_string(),
       from: this.identifier,
       seeder,
       furrow,
@@ -226,15 +228,34 @@ export class TorrentPeer extends TorrentDHTNode {
   ) {
     this._unbind_seeder_or_furrow(seeder, furrow);
 
-    const control: TorrentControlMessage = {
+    const control: Omit<
+      Extract<TorrentControlMessage, { type: "ANNOUNCE_UNBIND" }>,
+      "control_id"
+    > = {
       type: "ANNOUNCE_UNBIND",
-      control_id: TorrentUtils.random_string(),
       from: this.identifier,
       seeder,
       furrow,
     };
 
     this.emit("unbind", { seeder, furrow });
+    this._broadcast_control(control);
+  }
+
+  swarm_key_refresh(
+    seeder: TorrentControlSeeder,
+    furrow?: TorrentControlFurrow,
+  ) {
+    const control: Omit<
+      Extract<TorrentControlMessage, { type: "SWARM_KEY_REFRESH" }>,
+      "artifacts" | "control_id"
+    > = {
+      type: "SWARM_KEY_REFRESH",
+      from: this.identifier,
+      seeder,
+      furrow,
+    };
+
     this._broadcast_control(control);
   }
 
@@ -312,7 +333,8 @@ export class TorrentPeer extends TorrentDHTNode {
       case "FOUND":
       case "NOT_FOUND":
       case "EPH_KEY_OFFER":
-      case "EPH_KEY_EXCHANGE": {
+      case "EPH_KEY_EXCHANGE":
+      case "SWARM_KEY_REFRESH": {
         await this._handle_signed_control_msg(control, remote_id);
         break;
       }
@@ -357,19 +379,16 @@ export class TorrentPeer extends TorrentDHTNode {
       };
     const { control_id, artifacts, ...msg_body } = temp_control;
     const msg_bytes = TorrentUtils.to_array_buffer(msg_body);
-
-    console.log({
-      msg_body,
-      msg_buffer: msg_bytes,
-      sig: artifacts.signature,
-    });
-
     const valid = await TorrentIdentity.verify(
       msg_bytes,
       TorrentUtils.from_base64_url(artifacts.signature),
       artifacts.pub_key,
     );
-    if (!valid) return;
+
+    if (!valid) {
+      this.emit("message_malformed", control);
+      return;
+    }
 
     switch (control.type) {
       case "PUBLISH": {
@@ -397,7 +416,7 @@ export class TorrentPeer extends TorrentDHTNode {
       }
 
       case "FOUND": {
-        this._handle_found(control);
+        await this._handle_found(control);
         break;
       }
 
@@ -407,12 +426,17 @@ export class TorrentPeer extends TorrentDHTNode {
       }
 
       case "EPH_KEY_OFFER": {
-        this._handle_eph_offer(control);
+        await this._handle_eph_offer(control);
         break;
       }
 
       case "EPH_KEY_EXCHANGE": {
-        this._handle_eph_exchange(control);
+        await this._handle_eph_exchange(control);
+        break;
+      }
+
+      case "SWARM_KEY_REFRESH": {
+        this._handle_swarm_key_refresh(control);
         break;
       }
     }
@@ -660,7 +684,7 @@ export class TorrentPeer extends TorrentDHTNode {
     }
   }
 
-  private _handle_found(
+  private async _handle_found(
     msg: Extract<TorrentControlMessage, { type: "FOUND" }>,
   ) {
     const { seeder, furrow } = msg;
@@ -670,6 +694,93 @@ export class TorrentPeer extends TorrentDHTNode {
       furrow,
       peer_id: msg.from,
     });
+
+    this._handle_swarm_key_refresh({ ...msg, type: "SWARM_KEY_REFRESH" });
+  }
+
+  private async _handle_eph_offer(
+    msg: Extract<TorrentControlMessage, { type: "EPH_KEY_OFFER" }>,
+  ) {
+    const { seeder: found_seeder, furrow: found_furrow } = this._search_hosted(
+      msg.seeder,
+      msg?.furrow,
+    );
+
+    const seeder = this.seeders.find((s) => s.identifier === msg.seeder.id);
+    if (!found_seeder || !seeder) return;
+    if (!seeder.identity) return;
+
+    if (!found_furrow)
+      await this._execute_eph_exchange(
+        seeder.identity,
+        seeder.get_swarm_key(),
+        msg,
+      );
+
+    // Send ephemeral offer for furrow if applicable
+    if (!found_furrow || !msg.furrow) return;
+    const furrow_msg = msg.furrow;
+    const furrow = seeder.furrows.find((f) => f.identifier === furrow_msg.id);
+    if (furrow)
+      await this._execute_eph_exchange(
+        furrow.identity,
+        furrow.get_swarm_key(),
+        msg,
+      );
+  }
+
+  private async _handle_eph_exchange(
+    msg: Extract<TorrentControlMessage, { type: "EPH_KEY_EXCHANGE" }>,
+  ) {
+    const identity_pub_key = await TorrentIdentity.jwk_to_crypto(
+      msg.key_sig.identity_pub_key,
+    );
+    const valid = await TorrentIdentity.verify(
+      TorrentUtils.from_base64_url(msg.key_sig.eph_pub_key),
+      TorrentUtils.from_base64_url(msg.key_sig.signature),
+      identity_pub_key,
+    );
+    const _eph = this.eph_aes_keys.get(
+      msg.furrow ? msg.furrow.id : msg.seeder.id,
+    );
+
+    if (!valid) return;
+    if (_eph?.ephemeral) {
+      const aes_salt = TorrentUtils.from_base64_url(msg.encrypted.aes_salt);
+
+      const aes_key = await _eph.ephemeral.create_aes_key(
+        TorrentUtils.from_base64_url(msg.eph_pub_key),
+        aes_salt,
+      );
+      const swarm_key = await TorrentUtils.decrypt(
+        TorrentUtils.from_base64_url(msg.encrypted.swarm_key),
+        aes_key.aes_key,
+      );
+      // do something with swarm_key
+      this._remove_from_hosted(msg.seeder.name, msg.furrow?.name);
+
+      this.emit("swarm_key_exchanged", {
+        seeder: {
+          ...msg.seeder,
+          // dont add swarm_key as it is for the furrow
+          ...(!msg.furrow
+            ? {
+                swarm_key,
+              }
+            : {}),
+        },
+        ...(msg.furrow ? { furrow: { ...msg.furrow, swarm_key } } : {}),
+        peer_id: msg.from,
+      });
+
+      this.eph_aes_keys.delete(msg.furrow ? msg.furrow.id : msg.seeder.id);
+    }
+  }
+
+  private _handle_swarm_key_refresh(
+    msg: Extract<TorrentControlMessage, { type: "SWARM_KEY_REFRESH" }>,
+  ) {
+    const { seeder, furrow } = msg;
 
     TorrentEphemeral.create().then((eph_key) => {
       this.eph_aes_keys.set(furrow ? furrow.id : seeder.id, {
@@ -692,89 +803,6 @@ export class TorrentPeer extends TorrentDHTNode {
         this._broadcast_control(eph_offer_msg);
       });
     });
-  }
-
-  private _handle_eph_offer(
-    msg: Extract<TorrentControlMessage, { type: "EPH_KEY_OFFER" }>,
-  ) {
-    const { seeder: found_seeder, furrow: found_furrow } = this._search_hosted(
-      msg.seeder,
-      msg?.furrow,
-    );
-
-    const seeder = this.seeders.find((s) => s.identifier === msg.seeder.id);
-    if (!found_seeder || !seeder) return;
-    if (!seeder.identity) return;
-
-    if (!found_furrow)
-      this._execute_eph_exchange(seeder.identity, seeder.get_swarm_key(), msg);
-
-    // Send ephemeral offer for furrow if applicable
-    if (!found_furrow || !msg.furrow) return;
-    const furrow_msg = msg.furrow;
-    const furrow = seeder.furrows.find((f) => f.identifier === furrow_msg.id);
-    if (furrow)
-      this._execute_eph_exchange(furrow.identity, furrow.get_swarm_key(), msg);
-  }
-
-  private _handle_eph_exchange(
-    msg: Extract<TorrentControlMessage, { type: "EPH_KEY_EXCHANGE" }>,
-  ) {
-    TorrentIdentity.jwk_to_crypto(msg.key_sig.identity_pub_key).then(
-      (identity_pub_key) => {
-        TorrentIdentity.verify(
-          TorrentUtils.from_base64_url(msg.key_sig.eph_pub_key),
-          TorrentUtils.from_base64_url(msg.key_sig.signature),
-          identity_pub_key,
-        ).then((valid) => {
-          const _eph = this.eph_aes_keys.get(
-            msg.furrow ? msg.furrow.id : msg.seeder.id,
-          );
-          if (valid) {
-            if (_eph?.ephemeral) {
-              const aes_salt = TorrentUtils.from_base64_url(
-                msg.encrypted.aes_salt,
-              );
-
-              _eph.ephemeral
-                .create_aes_key(
-                  TorrentUtils.from_base64_url(msg.eph_pub_key),
-                  aes_salt,
-                )
-                .then((aes_key) => {
-                  TorrentUtils.decrypt(
-                    TorrentUtils.from_base64_url(msg.encrypted.swarm_key),
-                    aes_key.aes_key,
-                  ).then((swarm_key) => {
-                    // do something with swarm_key
-                    this._remove_from_hosted(msg.seeder.name, msg.furrow?.name);
-
-                    this.emit("swarm_key_exchanged", {
-                      seeder: {
-                        ...msg.seeder,
-                        // dont add swarm_key as it is for the furrow
-                        ...(!msg.furrow
-                          ? {
-                              swarm_key,
-                            }
-                          : {}),
-                      },
-                      ...(msg.furrow
-                        ? { furrow: { ...msg.furrow, swarm_key } }
-                        : {}),
-                      peer_id: msg.from,
-                    });
-
-                    this.eph_aes_keys.delete(
-                      msg.furrow ? msg.furrow.id : msg.seeder.id,
-                    );
-                  });
-                });
-            }
-          }
-        });
-      },
-    );
   }
 
   private _handle_lru_store(
@@ -911,17 +939,12 @@ export class TorrentPeer extends TorrentDHTNode {
 
     if (
       control.type !== "ANNOUNCE_BIND" &&
-      control.type !== "ANNOUNCE_UNBIND"
+      control.type !== "ANNOUNCE_UNBIND" &&
+      control.type !== "LRU_STORE"
     ) {
       const msg_bytes = TorrentUtils.to_array_buffer(cleaned_control);
       const signature = await this.identity.sign(msg_bytes);
       const pub_key = await this.identity.export_public_jwk();
-
-      console.log({
-        msg_body: cleaned_control,
-        msg_buffer: msg_bytes,
-        sig: TorrentUtils.to_base64_url(signature),
-      });
 
       return {
         ...cleaned_control,
@@ -1038,61 +1061,50 @@ export class TorrentPeer extends TorrentDHTNode {
     this.broker_bindings.delete(this.utils.serialize_binding(seeder_key));
   }
 
-  private _execute_eph_exchange(
+  private async _execute_eph_exchange(
     identity: TorrentIdentity,
     swarm_key: ArrayBuffer,
     msg: Extract<TorrentControlMessage, { type: "EPH_KEY_OFFER" }>,
   ) {
-    TorrentEphemeral.create().then((eph_key) => {
-      identity
-        .sign(TorrentUtils.from_base64_url(msg.eph_pub_key))
-        .then((signature) => {
-          identity.export_public_jwk().then((identity_pub_key) => {
-            eph_key.export_public().then((eph_pub_key) => {
-              const aes_salt = TorrentUtils.generate_salt();
+    const eph_key = await TorrentEphemeral.create();
+    const signature = await identity.sign(
+      TorrentUtils.from_base64_url(msg.eph_pub_key),
+    );
+    const identity_pub_key = await identity.export_public_jwk();
+    const eph_pub_key = await eph_key.export_public();
+    const aes_salt = TorrentUtils.generate_salt();
 
-              eph_key
-                .create_aes_key(
-                  TorrentUtils.from_base64_url(msg.eph_pub_key),
-                  aes_salt,
-                )
-                .then((aes_key) => {
-                  // send swarm key
-                  TorrentUtils.encrypt(swarm_key, aes_key.aes_key).then(
-                    (encrypted_swarm_key_array_buffer) => {
-                      const eph_offer_msg: Omit<
-                        Extract<
-                          TorrentControlMessage,
-                          { type: "EPH_KEY_EXCHANGE" }
-                        >,
-                        "artifacts" | "control_id"
-                      > = {
-                        type: "EPH_KEY_EXCHANGE",
-                        from: this.identifier,
-                        to: msg.from,
-                        seeder: msg.seeder,
-                        furrow: msg.furrow,
-                        eph_pub_key: TorrentUtils.to_base64_url(eph_pub_key),
-                        key_sig: {
-                          eph_pub_key: msg.eph_pub_key,
-                          signature: TorrentUtils.to_base64_url(signature),
-                          identity_pub_key,
-                        },
-                        encrypted: {
-                          swarm_key: TorrentUtils.to_base64_url(
-                            encrypted_swarm_key_array_buffer,
-                          ),
-                          aes_salt: TorrentUtils.to_base64_url(aes_salt),
-                        },
-                      };
+    const aes_key_obj = await eph_key.create_aes_key(
+      TorrentUtils.from_base64_url(msg.eph_pub_key),
+      aes_salt,
+    );
+    const encrypted_swarm_key_array_buffer = await TorrentUtils.encrypt(
+      swarm_key,
+      aes_key_obj.aes_key,
+    );
 
-                      this._broadcast_control(eph_offer_msg);
-                    },
-                  );
-                });
-            });
-          });
-        });
-    });
+    // send swarm key
+    const eph_offer_msg: Omit<
+      Extract<TorrentControlMessage, { type: "EPH_KEY_EXCHANGE" }>,
+      "artifacts" | "control_id"
+    > = {
+      type: "EPH_KEY_EXCHANGE",
+      from: this.identifier,
+      to: msg.from,
+      seeder: msg.seeder,
+      furrow: msg.furrow,
+      eph_pub_key: TorrentUtils.to_base64_url(eph_pub_key),
+      key_sig: {
+        eph_pub_key: msg.eph_pub_key,
+        signature: TorrentUtils.to_base64_url(signature),
+        identity_pub_key,
+      },
+      encrypted: {
+        swarm_key: TorrentUtils.to_base64_url(encrypted_swarm_key_array_buffer),
+        aes_salt: TorrentUtils.to_base64_url(aes_salt),
+      },
+    };
+
+    this._broadcast_control(eph_offer_msg);
   }
 }
