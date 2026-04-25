@@ -787,13 +787,10 @@ export class TorrentPeer extends TorrentDHTNode {
   private async _handle_pulse(
     msg: Extract<TorrentControlMessage, { type: "PULSE" }>,
   ) {
-    const { seeder: msg_seeder, furrow: msg_furrow } = msg;
-    const seeder = this.seeders.find((s) => s.identifier === msg_seeder.id);
-    if (seeder && msg_furrow) {
-      const furrow = seeder.furrows.find((f) => f.identifier === msg_furrow.id);
-      if (furrow)
-        this.emit("pulse", { id: msg_furrow.id, name: msg_furrow.name });
-    } else this.emit("pulse", { id: msg_seeder.id, name: msg_seeder.name });
+    const { seeder, furrow } = msg;
+
+    this.emit("seeder_pulse", { id: seeder.id, name: seeder.name });
+    if (furrow) this.emit("furrow_pulse", { id: furrow.id, name: furrow.name });
   }
 
   private _handle_lru_store(

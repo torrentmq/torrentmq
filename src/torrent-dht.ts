@@ -16,7 +16,8 @@ export class TorrentDHTNode extends TorrentEmitter<
   | "control_message"
   | "status_update"
   | "swarm_key_exchanged"
-  | "pulse"
+  | "seeder_pulse"
+  | "furrow_pulse"
 > {
   protected data_store: TorrentLRUCache<string, TorrentControlMessage>;
   // map of remote peer id -> TorrentPeerEntry { RTCPeerConnection, RTCDataChannel, TorrentBrokerBindings }

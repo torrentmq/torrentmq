@@ -29,10 +29,10 @@ export class TorrentSeeder extends TorrentEmitter<"created_furrow"> {
 
   private key_refresh_interval: ReturnType<typeof setInterval> | null = null;
   private pulse_interval: ReturnType<typeof setInterval> | null = null;
+  private watchdog_timer: ReturnType<typeof setTimeout> | null = null;
 
-  private last_pulse_received: number = Date.now();
   // random failover window to avoid collision
-  private readonly failover_timeout: number = 9000 + Math.random() * 3000;
+  private readonly failover_timeout: number = 2000 + Math.random() * 1000;
 
   readonly name: string;
   readonly options: TorrentSeederParams;
@@ -225,7 +225,7 @@ export class TorrentSeeder extends TorrentEmitter<"created_furrow"> {
     this.peer.on<{
       seeder: TorrentHostedObj & { swarm_key: ArrayBuffer };
       furrow?: TorrentHostedObj & { swarm_key: ArrayBuffer };
-    }>("swarm_key_exchanged", ({ seeder, furrow }) => {
+    }>("swarm_key_exchanged", ({ seeder }) => {
       if (this.name !== seeder.name) return;
 
       this.identifier = seeder.id;
@@ -239,16 +239,19 @@ export class TorrentSeeder extends TorrentEmitter<"created_furrow"> {
     });
 
     // pulse monitoring for failover
-    this.peer.on<{ id: string; name: string }>("pulse", ({ id, name }) => {
-      if (id === this.identifier && name === this.name) {
-        this.last_pulse_received = Date.now();
-      }
-    });
+    this.peer.on<{ id: string; name: string }>(
+      "seeder_pulse",
+      ({ id, name }) => {
+        if (id === this.identifier && name === this.name) {
+          if (this.is_root) this.demote_from_root();
+          else this.reset_watchdog();
+        }
+      },
+    );
   }
 
   private start_intervals() {
-    this.stop_key_refresh();
-    this.stop_pulsating();
+    this.stop_all_timers();
 
     if (this.is_root) {
       this.key_refresh_interval = setInterval(async () => {
@@ -258,31 +261,45 @@ export class TorrentSeeder extends TorrentEmitter<"created_furrow"> {
 
       this.pulse_interval = setInterval(() => {
         this.peer.send_pulse({ id: this.identifier, name: this.name });
-      }, 3000);
-    } else
-      this.pulse_interval = setInterval(() => {
-        const time_since_last_pulse = Date.now() - this.last_pulse_received;
-        if (time_since_last_pulse > this.failover_timeout) {
-          this.promote_to_root();
-        }
-      }, 3000);
+      }, 1000);
+    } else this.reset_watchdog();
   }
 
-  private stop_key_refresh() {
+  private reset_watchdog() {
+    this.stop_watchdog();
+    this.watchdog_timer = setTimeout(() => {
+      this.promote_to_root();
+    }, this.failover_timeout);
+  }
+
+  private stop_watchdog() {
+    if (this.watchdog_timer) clearTimeout(this.watchdog_timer);
+    this.watchdog_timer = null;
+  }
+
+  private stop_all_timers() {
     if (this.key_refresh_interval) clearInterval(this.key_refresh_interval);
-    this.key_refresh_interval = null;
-  }
-
-  private stop_pulsating() {
     if (this.pulse_interval) clearInterval(this.pulse_interval);
+    if (this.watchdog_timer) clearTimeout(this.watchdog_timer);
+
+    this.key_refresh_interval = null;
     this.pulse_interval = null;
+    this.watchdog_timer = null;
   }
 
   private promote_to_root() {
+    if (this.is_root) return;
     this.is_root = true;
     this.start_intervals();
 
     // use pulse to signal dominance
     this.peer.send_pulse({ id: this.identifier, name: this.name });
+  }
+
+  private demote_from_root() {
+    if (!this.is_root) return;
+    this.is_root = false;
+    this.stop_all_timers();
+    this.reset_watchdog();
   }
 }
