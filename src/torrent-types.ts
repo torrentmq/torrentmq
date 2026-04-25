@@ -1,11 +1,6 @@
 import { TorrentIdentity } from "./torrent-identity";
 import { TorrentMessage } from "./torrent-message";
 
-export type TorrentPeerHostingSize = {
-  number_of_seeders: number;
-  number_of_furrows_per_seeder: number;
-};
-
 export type TorrentSeederFurrowSecurityObject = {
   identifier: string;
   identity: TorrentIdentity;

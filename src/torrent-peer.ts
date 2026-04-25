@@ -7,7 +7,6 @@ import { TorrentSeeder } from "./torrent-seeder";
 import {
   TorrentBrokerHost,
   TorrentControlMessage,
-  TorrentPeerHostingSize,
   TorrentFurrowBindingObj,
   TorrentSeederBindingObj,
   TorrentSeederParams,
@@ -34,29 +33,15 @@ export class TorrentPeer extends TorrentDHTNode {
   > = new Map();
   private is_connected: boolean = false;
 
-  readonly max_hosting_size: TorrentPeerHostingSize = {
-    number_of_seeders: 4,
-    number_of_furrows_per_seeder: 8,
-  };
-
   constructor(options?: {
     ws_url?: string;
-    peer_max_hosting_size?: TorrentPeerHostingSize;
     min_peer_cluster_size?: number;
     max_peer_cluster_size?: number;
     status_frequency?: number;
     partion_heal_interval?: number;
     lru_size?: number;
   }) {
-    const { peer_max_hosting_size, ...rest } = options || {};
-    super(rest);
-
-    if (
-      peer_max_hosting_size &&
-      peer_max_hosting_size?.number_of_furrows_per_seeder > 0 &&
-      peer_max_hosting_size?.number_of_seeders > 0
-    )
-      this.max_hosting_size = peer_max_hosting_size;
+    super(options);
 
     // Handlers from dht node
     this.on<{ parsed: TorrentControlMessage; remote_id: string }>(
@@ -333,7 +318,8 @@ export class TorrentPeer extends TorrentDHTNode {
       case "NOT_FOUND":
       case "EPH_KEY_OFFER":
       case "EPH_KEY_EXCHANGE":
-      case "SWARM_KEY_REFRESH": {
+      case "SWARM_KEY_REFRESH":
+      case "PULSE": {
         await this._handle_signed_control_msg(control, remote_id);
         break;
       }
@@ -438,6 +424,11 @@ export class TorrentPeer extends TorrentDHTNode {
         this._handle_swarm_key_refresh(control);
         break;
       }
+
+      case "PULSE": {
+        this._handle_pulse(control);
+        break;
+      }
     }
   }
 
@@ -518,11 +509,6 @@ export class TorrentPeer extends TorrentDHTNode {
   private _handle_receive(
     msg: Extract<TorrentControlMessage, { type: "PUBLISH" }>,
   ) {
-    // ignore if message from self
-    if (msg.from === this.identifier) return;
-
-    // already processed, skip entirely
-    if (this.data_store.has(msg.control_id)) return;
     this._forward_msg(msg);
     // Local routing: accept message if routing_key matches this.identifier or empty
     const routing_key = msg.message?.properties?.routing_key ?? "";
@@ -577,10 +563,6 @@ export class TorrentPeer extends TorrentDHTNode {
   private async _handle_submit(
     msg: Extract<TorrentControlMessage, { type: "SUBMIT" }>,
   ) {
-    if (msg.from === this.identifier) return;
-    // already processed, skip entirely
-    if (this.data_store.has(msg.control_id)) return;
-
     const { seeder: found_seeder, furrow: found_furrow } = this._search_hosted(
       msg.seeder,
       msg?.furrow,
@@ -604,49 +586,49 @@ export class TorrentPeer extends TorrentDHTNode {
     const message_signer = furrow ?? seeder;
     if (!message_signer.is_root) return;
 
-    message_signer.identity.sign(encrypted_message_body).then((signature) => {
-      const control: Omit<
-        Extract<TorrentControlMessage, { type: "PUBLISH" }>,
-        "artifacts" | "control_id"
-      > = {
-        from: msg.from,
-        type: "PUBLISH",
-        seeder: {
-          id: seeder.identifier,
-          name: seeder.name,
-          pub_key: seeder.pub_key,
+    const signature = await message_signer.identity.sign(
+      encrypted_message_body,
+    );
+    const control: Omit<
+      Extract<TorrentControlMessage, { type: "PUBLISH" }>,
+      "artifacts" | "control_id"
+    > = {
+      from: msg.from,
+      type: "PUBLISH",
+      seeder: {
+        id: seeder.identifier,
+        name: seeder.name,
+        pub_key: seeder.pub_key,
+      },
+      ...(furrow
+        ? {
+            furrow: {
+              id: furrow.identifier,
+              name: furrow.name,
+              pub_key: furrow.pub_key,
+            },
+          }
+        : {}),
+      message: {
+        ...msg?.message,
+        artifacts: {
+          mac: msg?.message?.artifacts.mac || "",
+          pub_key: message_signer.pub_key,
+          signature: TorrentUtils.to_base64_url(signature),
+          timestamp: Date.now(),
         },
-        ...(furrow
-          ? {
-              furrow: {
-                id: furrow.identifier,
-                name: furrow.name,
-                pub_key: furrow.pub_key,
-              },
-            }
-          : {}),
-        message: {
-          ...msg?.message,
-          artifacts: {
-            mac: msg?.message?.artifacts.mac || "",
-            pub_key: message_signer.pub_key,
-            signature: TorrentUtils.to_base64_url(signature),
-            timestamp: Date.now(),
-          },
-        },
-      };
+      },
+    };
 
-      this._add_message_artifacts(control).then((artifacted_control) => {
-        const _control = artifacted_control as Extract<
-          TorrentControlMessage,
-          { type: "PUBLISH" }
-        >;
+    const artifacted_control = await this._add_message_artifacts(control);
+    const _control = artifacted_control as Extract<
+      TorrentControlMessage,
+      { type: "PUBLISH" }
+    >;
 
-        // send to ourselves???
-        this._handle_receive(_control);
-        this._forward_msg(_control);
-      });
-    });
+    // send to ourselves???
+    this._handle_receive(_control);
+    this._forward_msg(_control);
   }
 
   private _handle_find(msg: Extract<TorrentControlMessage, { type: "FIND" }>) {
@@ -694,7 +676,7 @@ export class TorrentPeer extends TorrentDHTNode {
       peer_id: msg.from,
     });
 
-    this._handle_swarm_key_refresh({ ...msg, type: "SWARM_KEY_REFRESH" });
+    await this._handle_swarm_key_refresh({ ...msg, type: "SWARM_KEY_REFRESH" });
   }
 
   private async _handle_eph_offer(
@@ -776,32 +758,42 @@ export class TorrentPeer extends TorrentDHTNode {
     }
   }
 
-  private _handle_swarm_key_refresh(
+  private async _handle_swarm_key_refresh(
     msg: Extract<TorrentControlMessage, { type: "SWARM_KEY_REFRESH" }>,
   ) {
     const { seeder, furrow } = msg;
 
-    TorrentEphemeral.create().then((eph_key) => {
-      this.eph_aes_keys.set(furrow ? furrow.id : seeder.id, {
-        ephemeral: eph_key,
-      });
-
-      eph_key.export_public().then((eph_pub_key_array_buffer) => {
-        const eph_offer_msg: Omit<
-          Extract<TorrentControlMessage, { type: "EPH_KEY_OFFER" }>,
-          "artifacts" | "control_id"
-        > = {
-          type: "EPH_KEY_OFFER",
-          from: this.identifier,
-          to: msg.from,
-          seeder,
-          furrow,
-          eph_pub_key: TorrentUtils.to_base64_url(eph_pub_key_array_buffer),
-        };
-
-        this._broadcast_control(eph_offer_msg);
-      });
+    const eph_key = await TorrentEphemeral.create();
+    const eph_pub_key_array_buffer = await eph_key.export_public();
+    this.eph_aes_keys.set(furrow ? furrow.id : seeder.id, {
+      ephemeral: eph_key,
     });
+
+    const eph_offer_msg: Omit<
+      Extract<TorrentControlMessage, { type: "EPH_KEY_OFFER" }>,
+      "artifacts" | "control_id"
+    > = {
+      type: "EPH_KEY_OFFER",
+      from: this.identifier,
+      to: msg.from,
+      seeder,
+      furrow,
+      eph_pub_key: TorrentUtils.to_base64_url(eph_pub_key_array_buffer),
+    };
+
+    this._broadcast_control(eph_offer_msg);
+  }
+
+  private async _handle_pulse(
+    msg: Extract<TorrentControlMessage, { type: "PULSE" }>,
+  ) {
+    const { seeder: msg_seeder, furrow: msg_furrow } = msg;
+    const seeder = this.seeders.find((s) => s.identifier === msg_seeder.id);
+    if (seeder && msg_furrow) {
+      const furrow = seeder.furrows.find((f) => f.identifier === msg_furrow.id);
+      if (furrow)
+        this.emit("pulse", { id: msg_furrow.id, name: msg_furrow.name });
+    } else this.emit("pulse", { id: msg_seeder.id, name: msg_seeder.name });
   }
 
   private _handle_lru_store(
@@ -877,10 +869,11 @@ export class TorrentPeer extends TorrentDHTNode {
   private _calculate_candidates(): { peer_id: string; ema: number }[] {
     // NOTE: stop assaulting this fucking code pls
     // I DON'T THINK SO BUDDY
-    const all_peers = Array.from(this.connected_peers.entries());
-    const candidates: Array<{ peer_id: string; ema: number }> = all_peers
-      .filter(([, entry]) => entry?.dc && entry.dc.readyState === "open")
-      .map(([peer_id, entry]) => ({
+    const active_peers = Array.from(this.connected_peers.entries()).filter(
+      ([, entry]) => entry?.dc && entry.dc.readyState === "open",
+    );
+    const candidates: Array<{ peer_id: string; ema: number }> =
+      active_peers.map(([peer_id, entry]) => ({
         peer_id,
         ema: entry?.stats?.distance ?? Infinity,
       }));

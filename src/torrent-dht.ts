@@ -12,7 +12,11 @@ import {
 import { TorrentUtils } from "./torrent-utils";
 
 export class TorrentDHTNode extends TorrentEmitter<
-  TorrentEventName | "control_message" | "status_update" | "swarm_key_exchanged"
+  | TorrentEventName
+  | "control_message"
+  | "status_update"
+  | "swarm_key_exchanged"
+  | "pulse"
 > {
   protected data_store: TorrentLRUCache<string, TorrentControlMessage>;
   // map of remote peer id -> TorrentPeerEntry { RTCPeerConnection, RTCDataChannel, TorrentBrokerBindings }
