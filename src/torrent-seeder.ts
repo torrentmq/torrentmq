@@ -76,7 +76,6 @@ export class TorrentSeeder extends TorrentEmitter<"created_furrow"> {
         this.peer.swarm_key_refresh({
           id: this.identifier,
           name: this.name,
-          pub_key: this.pub_key,
         });
 
         this.last_key_refresh = Date.now();
@@ -199,6 +198,7 @@ export class TorrentSeeder extends TorrentEmitter<"created_furrow"> {
     arg1?: string | TorrentFurrowParams,
     arg2?: string | TorrentFurrowParams,
   ) {
+    // for my latest magic trick
     let name: string | undefined;
     let options: TorrentFurrowParams | undefined;
 

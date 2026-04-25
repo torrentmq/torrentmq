@@ -245,7 +245,6 @@ export class TorrentDHTNode extends TorrentEmitter<
         const created = this.connected_peers.get(remote_id)!;
         created.ice_queue = created.ice_queue ?? [];
         created.making_offer = created.making_offer ?? false;
-        created.israp = created.israp ?? false;
       }
     };
 
@@ -286,7 +285,6 @@ export class TorrentDHTNode extends TorrentEmitter<
     // attach runtime-only helpers (avoid having to change external types immediately)
     entry.ice_queue = [];
     entry.making_offer = false;
-    entry.israp = false;
 
     this.connected_peers.set(remote_id, entry);
     return entry;
@@ -376,24 +374,21 @@ export class TorrentDHTNode extends TorrentEmitter<
 
     // create pc and optionally datachannel only if we are the designated offerer
     const entry = this._create_peer_connection(remote_id, i_am_offerer);
-    const pc = entry.pc as RTCPeerConnection;
+    const pc: RTCPeerConnection = entry.pc;
 
     // If we're not the offerer, do not create an offer now — wait for the remote OFFER and for ondatachannel.
-    if (!i_am_offerer) {
-      return;
-    }
+    if (!i_am_offerer) return;
 
     // Offerer flow: set makingOffer flag and create offer
     try {
       entry.making_offer = true;
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
+      await pc.setLocalDescription();
 
       const msg: TorrentSignalMessage = {
         type: "OFFER",
         from: this.identifier,
         to: remote_id,
-        sdp: offer,
+        sdp: pc.localDescription as RTCSessionDescription,
       };
 
       try {
@@ -456,46 +451,26 @@ export class TorrentDHTNode extends TorrentEmitter<
     if (msg.to && msg.to !== this.identifier) return;
 
     // ensure entry exists (we are the non-offerer or we didn't initiate connection)
-    let entry = this.connected_peers.get(remote_id);
-
-    if (!entry) {
-      entry = this._create_peer_connection(remote_id, false);
-    }
-
+    let entry =
+      this.connected_peers.get(remote_id) ||
+      this._create_peer_connection(remote_id, false);
     const pc: RTCPeerConnection = entry.pc;
 
     // negotiation: handle glare
-    const offerCollision =
-      entry.making_offer === true || pc.signalingState !== "stable";
-
-    if (offerCollision) {
-      try {
-        // rollback local description if necessary - some browsers require this guard
-        await pc.setLocalDescription({ type: "rollback" });
-      } catch (e) {
-        // some browsers throw here, just warn
-        console.warn("rollback failed during offer handling", e);
-      }
-    }
-
     try {
-      // set remote description from the offer
-      await pc.setRemoteDescription(msg.sdp);
+      const is_polite = this.identifier.localeCompare(remote_id) < 0;
+      const offer_collision =
+        entry.making_offer === true || pc.signalingState !== "stable";
 
-      // flush queued ICE candidates (if any)
-      if (entry.ice_queue && entry.ice_queue.length) {
-        for (const c of entry.ice_queue) {
-          try {
-            // candidate could be RTCIceCandidateInit or null-ish
-            if (c) await pc.addIceCandidate(c);
-          } catch (err) {
-            console.warn(
-              "queued ice failed to add (during offer handling)",
-              err,
-            );
-          }
-        }
-        entry.ice_queue = [];
+      // If there's a collision and we are impolite, we ignore their offer (they will back down)
+      // If there's a collision and we are polite, we rollback our offer to accept theirs
+      if (offer_collision) {
+        if (!is_polite) return;
+        await pc.setLocalDescription({ type: "rollback" });
+        await pc.setRemoteDescription(msg.sdp);
+        await this._flush_ice_candidates(entry);
+      } else {
+        await pc.setRemoteDescription(msg.sdp);
       }
 
       // create answer
@@ -507,7 +482,7 @@ export class TorrentDHTNode extends TorrentEmitter<
         type: "ANSWER",
         from: this.identifier,
         to: remote_id,
-        sdp: answer,
+        sdp: pc.localDescription as RTCSessionDescription,
       };
       try {
         this.signaller.send(resp);
@@ -527,49 +502,19 @@ export class TorrentDHTNode extends TorrentEmitter<
 
     if (!entry) return;
 
-    try {
-      const pc: RTCPeerConnection = entry.pc;
-      // Only set remote description if we previously had a local offer
-      if (
-        pc.signalingState === "have-local-offer" ||
-        pc.signalingState === "stable"
-      ) {
-        await pc.setRemoteDescription(msg.sdp);
+    const pc: RTCPeerConnection = entry.pc;
 
-        // flush queued ICE candidates
-        if (entry.ice_queue && entry.ice_queue.length) {
-          for (const c of entry.ice_queue) {
-            try {
-              if (c) await pc.addIceCandidate(c);
-            } catch (err) {
-              console.warn(
-                "queued ice failed to add (during answer handling)",
-                err,
-              );
-            }
-          }
-          entry.ice_queue = [];
-        }
-      } else {
-        // If signaling state is unexpected, still attempt to set remote description defensively.
-        try {
-          await pc.setRemoteDescription(msg.sdp);
-          if (entry.ice_queue && entry.ice_queue.length) {
-            for (const c of entry.ice_queue) {
-              try {
-                if (c) await pc.addIceCandidate(c);
-              } catch (err) {
-                console.warn("queued ice failed (fallback answer path)", err);
-              }
-            }
-            entry.ice_queue = [];
-          }
-        } catch (e) {
-          console.warn("failed to apply remote answer", e);
-        }
-      }
+    // If we aren't in the state to receive an answer, just drop it.
+    if (pc.signalingState !== "have-local-offer") {
+      console.warn("received unexpected answer in state:", pc.signalingState);
+      return;
+    }
+
+    try {
+      await pc.setRemoteDescription(msg.sdp);
+      await this._flush_ice_candidates(entry);
     } catch (e) {
-      console.warn("failed to apply remote answer", e);
+      console.error("failed to apply remote answer", e);
     }
   }
 
@@ -588,9 +533,11 @@ export class TorrentDHTNode extends TorrentEmitter<
 
       // If remoteDescription isn't set yet, queue the candidate
       const remote_desc = pc.remoteDescription;
-      const remote_desc_applied = !!(remote_desc && remote_desc.type);
+      // We only apply candidates if we have a remote description AND we aren't closed.
+      const can_accept_ice =
+        remote_desc && remote_desc.type && pc.signalingState !== "closed";
 
-      if (!remote_desc_applied) {
+      if (!can_accept_ice) {
         entry.ice_queue = entry.ice_queue ?? [];
         entry.ice_queue.push(candidate_init);
         return;
@@ -599,7 +546,7 @@ export class TorrentDHTNode extends TorrentEmitter<
       // Otherwise, add candidate right away
       await pc.addIceCandidate(candidate_init);
     } catch (e) {
-      console.warn("failed to add remote ice candidate", e);
+      console.warn("failed to add remote ICE candidate", e);
     }
   }
 
@@ -611,16 +558,19 @@ export class TorrentDHTNode extends TorrentEmitter<
     if (this.connected_peers.has(from)) return;
 
     if (this.connected_peers.size < this.max_peer_cluster_size) {
-      // they might not have discovered this peer so say "HIHI"
-      const hihi_broadcast: TorrentSignalMessage = {
-        type: "HIHI",
-        from: this.identifier,
-        to: msg.from,
-      };
-      this.signaller.send(hihi_broadcast);
+      const is_polite = this.identifier.localeCompare(from) < 0;
 
-      // create pc + dc and send OFFER (deterministic tie-break inside)
-      this._initiate_connection_to_peer(from);
+      if (is_polite) {
+        // they might not have discovered this peer so say "HIHI"
+        const hihi_broadcast: TorrentSignalMessage = {
+          type: "HIHI",
+          from: this.identifier,
+          to: msg.from,
+        };
+        this.signaller.send(hihi_broadcast);
+      } else
+        // create pc + dc and send OFFER (deterministic tie-break inside)
+        this._initiate_connection_to_peer(from);
     }
   }
 
@@ -629,7 +579,10 @@ export class TorrentDHTNode extends TorrentEmitter<
     if (from === this.identifier) return;
     if (this.connected_peers.has(from)) return;
 
-    this._initiate_connection_to_peer(from);
+    if (this.connected_peers.size < this.max_peer_cluster_size) {
+      const is_polite = this.identifier.localeCompare(from) < 0;
+      if (!is_polite) this._initiate_connection_to_peer(from);
+    }
   }
 
   private _handle_yoyo(msg: Extract<TorrentSignalMessage, { type: "YOYO" }>) {
@@ -676,6 +629,19 @@ export class TorrentDHTNode extends TorrentEmitter<
 
     // msg.peers contains the peer stats from the remote node
     this.emit("status_update", msg);
+  }
+
+  private async _flush_ice_candidates(entry: TorrentPeerEntry) {
+    if (!entry.ice_queue || entry.ice_queue.length === 0) return;
+
+    while (entry.ice_queue.length > 0) {
+      const candidate = entry.ice_queue.shift();
+      try {
+        await entry.pc.addIceCandidate(candidate);
+      } catch (e) {
+        console.warn("failed to add queued ICE candidate", e);
+      }
+    }
   }
 
   private async _get_connection_cost(pc: RTCPeerConnection) {

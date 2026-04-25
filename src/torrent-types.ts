@@ -183,7 +183,7 @@ export type TorrentControlMessage =
       type: "FOUND";
     })
   // key shit for exchange (seeder <-> peer)
-  // routes through the peere hosting the seeder
+  // routes through the peer hosting the seeder
   // it'll be a miracle if this works
   // 24th April 2026 : it did fucking work, lol
   | (TorrentControlPeerInfo & { type: "SWARM_KEY_REFRESH" })
@@ -204,6 +204,12 @@ export type TorrentControlMessage =
         swarm_key: string;
       };
     })
+  // this is part of my latest hallucinations
+  // can't wait for this to fail terribly
+  | (TorrentControlPeerInfo & { type: "PULSE" })
+  // yay synced storage (this does fuck all me finks)
+  // im kidding it is actually so useful for de-dups
+  // and ignoring any old messages still in a loop
   | {
       control_id: string;
       from: string;
@@ -217,8 +223,8 @@ export type TorrentSignalMessage =
   | { type: "HIHI"; from: string; to: string }
   | { type: "YOYO"; from: string; to?: string } // used instead of HELO and HIHI for partition recovery
   | { type: "BYE"; from: string; to?: string }
-  | { type: "OFFER"; from: string; to?: string; sdp: RTCSessionDescriptionInit }
-  | { type: "ANSWER"; from: string; to: string; sdp: RTCSessionDescriptionInit }
+  | { type: "OFFER"; from: string; to?: string; sdp: RTCSessionDescription }
+  | { type: "ANSWER"; from: string; to: string; sdp: RTCSessionDescription }
   | { type: "ICE"; from: string; to?: string; candidate: RTCIceCandidateInit }
   | {
       type: "STATUS";
@@ -250,7 +256,6 @@ export type TorrentPeerEntry = {
   bb?: TorrentBrokerBindings;
   ice_queue?: RTCIceCandidateInit[];
   making_offer?: boolean;
-  israp?: boolean; // is setting remote answer pending?
   stats?: {
     cost?: number;
     rtt?: number; // round trip time

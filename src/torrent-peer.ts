@@ -21,6 +21,7 @@ import {
 } from "./torrent-types";
 import { TorrentUtils } from "./torrent-utils";
 
+// Some days I think about blowing my top smoov off but today is not that day
 export class TorrentPeer extends TorrentDHTNode {
   // the hosted seeders and or furrows [seeeder_name] -> [furrow_name][]
   private hosted: TorrentBrokerHost = new Map();
@@ -207,19 +208,8 @@ export class TorrentPeer extends TorrentDHTNode {
     furrow: TorrentControlBindFurrow,
   ) {
     this._bind_seeder_or_furrow(seeder, furrow);
-
-    const control: Omit<
-      Extract<TorrentControlMessage, { type: "ANNOUNCE_BIND" }>,
-      "control_id"
-    > = {
-      type: "ANNOUNCE_BIND",
-      from: this.identifier,
-      seeder,
-      furrow,
-    };
-
+    this._send_simple("ANNOUNCE_BIND", seeder, furrow);
     this.emit("bind", { seeder, furrow });
-    this._broadcast_control(control);
   }
 
   unregister_remote_binding(
@@ -227,39 +217,48 @@ export class TorrentPeer extends TorrentDHTNode {
     furrow: TorrentControlBindFurrow,
   ) {
     this._unbind_seeder_or_furrow(seeder, furrow);
-
-    const control: Omit<
-      Extract<TorrentControlMessage, { type: "ANNOUNCE_UNBIND" }>,
-      "control_id"
-    > = {
-      type: "ANNOUNCE_UNBIND",
-      from: this.identifier,
-      seeder,
-      furrow,
-    };
-
+    this._send_simple("ANNOUNCE_UNBIND", seeder, furrow);
     this.emit("unbind", { seeder, furrow });
-    this._broadcast_control(control);
   }
 
   swarm_key_refresh(
-    seeder: TorrentControlSeeder,
-    furrow?: TorrentControlFurrow,
+    seeder: TorrentControlSeederOrFurrow,
+    furrow?: TorrentControlSeederOrFurrow,
+  ) {
+    this._send_simple("SWARM_KEY_REFRESH", seeder, furrow);
+  }
+
+  send_pulse(
+    seeder: TorrentControlSeederOrFurrow,
+    furrow?: TorrentControlSeederOrFurrow,
+  ) {
+    this._send_simple("PULSE", seeder, furrow);
+  }
+
+  private _send_simple<
+    T extends Extract<
+      TorrentControlMessage["type"],
+      "ANNOUNCE_BIND" | "ANNOUNCE_UNBIND" | "PULSE" | "SWARM_KEY_REFRESH"
+    >,
+  >(
+    type: T,
+    seeder: TorrentControlSeederOrFurrow | TorrentControlSeeder,
+    furrow?: TorrentControlSeederOrFurrow | TorrentControlBindFurrow,
   ) {
     const control: Omit<
-      Extract<TorrentControlMessage, { type: "SWARM_KEY_REFRESH" }>,
+      Extract<TorrentControlMessage, { type: T }>,
       "artifacts" | "control_id"
     > = {
-      type: "SWARM_KEY_REFRESH",
+      type,
       from: this.identifier,
       seeder,
       furrow,
-    };
+    } as any; // Cast used here because TS is such a whining bitch
 
     this._broadcast_control(control);
   }
 
-  //  NOTE: All control traffic to DCs only. WebSocket signaling is used only for HELO/OFFER/ANSWER/ICE.
+  //  NOTE: All control traffic to DCs only. WebSocket signaling is used only for HELO/OFFER/ANSWER/ICE etc.
   private _broadcast_control(
     control: Omit<TorrentControlMessage, "control_id" | "artifacts">,
     to_peer_id?: string,
@@ -869,14 +868,6 @@ export class TorrentPeer extends TorrentDHTNode {
     }
   }
 
-  private _split_candidates(
-    candidates: { peer_id: string; ema: number }[],
-    k: number,
-  ) {
-    const best = candidates.slice(0, k);
-    return best;
-  }
-
   // TODO: A* algorithm for advanced routing
   // get the stats for the peer connections
   // choose the best peer based on latency, bandwidth, etc.
@@ -884,24 +875,40 @@ export class TorrentPeer extends TorrentDHTNode {
   // Will be pivoting to Weighted K-Best Forwarding (W-KBF)
   // Which is a more efficient version of flodding.
   private _calculate_candidates(): { peer_id: string; ema: number }[] {
-    const candidates: Array<{ peer_id: string; ema: number }> = Array.from(
-      this.connected_peers.entries(),
-    ).map(([peer_id, entry]) => ({
-      peer_id,
-      ema: entry?.stats?.distance ?? Infinity,
-    }));
+    // NOTE: stop assaulting this fucking code pls
+    // I DON'T THINK SO BUDDY
+    const all_peers = Array.from(this.connected_peers.entries());
+    const candidates: Array<{ peer_id: string; ema: number }> = all_peers
+      .filter(([, entry]) => entry?.dc && entry.dc.readyState === "open")
+      .map(([peer_id, entry]) => ({
+        peer_id,
+        ema: entry?.stats?.distance ?? Infinity,
+      }));
+
+    if (candidates.length === 0) return [];
 
     const k_max = Math.ceil(Math.sqrt(candidates.length));
-    const k = Math.min(k_max, candidates.length);
+    const k = Math.max(1, Math.min(k_max, candidates.length)); // ensure the value of k is at least 1
 
-    candidates.sort((a, b) => a.ema - b.ema);
-    return this._split_candidates(candidates, k);
+    const known_stats = candidates.filter((c) => c.ema !== Infinity);
+    const unknown_stats = candidates.filter((c) => c.ema === Infinity);
+
+    if (known_stats.length > 0) {
+      // sort by EMA ie lowest distance first
+      known_stats.sort((a, b) => a.ema - b.ema);
+
+      if (known_stats.length >= k) return known_stats.slice(0, k);
+    }
+
+    // if not enough known stats, mix an random unknown peers
+    const shuffled_unknown = unknown_stats.sort(() => Math.random() - 0.5);
+    const combined = [...known_stats, ...shuffled_unknown];
+    return combined.slice(0, k);
   }
 
   // TODO: implement load balancing for sharing seeders
   // multiple peers hosting the same seeder but only part of it e.g. one furrow
   // private async _load_balance_control() {}
-  //
   // 3/4/2026: what was that guy thinking?
 
   private _search_hosted(

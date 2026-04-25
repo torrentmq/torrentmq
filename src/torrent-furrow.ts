@@ -23,6 +23,7 @@ export class TorrentFurrow {
   identity: TorrentIdentity;
   protected last_key_refresh: number = Date.now();
   private key_refresh_interval: ReturnType<typeof setInterval> | null = null;
+  private pulse_interval: ReturnType<typeof setInterval> | null = null;
 
   readonly name: string;
   readonly options: TorrentFurrowParams;
@@ -69,18 +70,34 @@ export class TorrentFurrow {
           {
             id: this.seeder.identifier,
             name: this.seeder.name,
-            pub_key: this.seeder.pub_key,
           },
           {
             id: this.identifier,
             name: this.name,
-            pub_key: this.pub_key,
           },
         );
 
         this.last_key_refresh = Date.now();
       });
     }, this.options.key_refresh ?? 600000);
+
+    this.pulse_interval = setInterval(() => {
+      if (!this.is_root) {
+        this.stop_pulsating();
+        return;
+      }
+
+      this.seeder.peer.send_pulse(
+        {
+          id: this.seeder.identifier,
+          name: this.seeder.name,
+        },
+        {
+          id: this.identifier,
+          name: this.name,
+        },
+      );
+    }, 3000);
 
     this.seeder.peer.on<{
       seeder: TorrentHostedObj & { swarm_key: ArrayBuffer };
@@ -311,6 +328,13 @@ export class TorrentFurrow {
     if (this.key_refresh_interval) {
       clearInterval(this.key_refresh_interval);
       this.key_refresh_interval = null;
+    }
+  }
+
+  private stop_pulsating() {
+    if (this.pulse_interval) {
+      clearInterval(this.pulse_interval);
+      this.pulse_interval = null;
     }
   }
 }
