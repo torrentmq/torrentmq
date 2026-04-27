@@ -85,6 +85,7 @@ export class TorrentPeer extends TorrentDHTNode {
     this._add_to_hosted({
       id: seeder.identifier,
       name: seeder.name,
+      mode: seeder.get_mode(),
       ...(cert ? { cert } : { pub_key }),
       ...(options && Object.keys(options).length > 0
         ? { properties: { ...options } }
@@ -123,8 +124,7 @@ export class TorrentPeer extends TorrentDHTNode {
         seeder: TorrentHostedObj;
         furrow: TorrentHostedObj;
       }) => {
-        if (this.hosted.has(this.utils.serialize_hosted(seeder)))
-          this._add_to_hosted(seeder, furrow);
+        this._add_to_hosted(seeder, furrow);
       },
     });
 
@@ -665,7 +665,9 @@ export class TorrentPeer extends TorrentDHTNode {
 
     // if there is a match for the seeder (and furrow if specified)
     // send FOUND back, otherwise NOT_FOUND
-    if (furrow ? seeder && furrow : seeder) {
+    if (
+      furrow ? seeder && furrow?.mode === "master" : seeder?.mode === "master"
+    ) {
       const fnd_msg: Omit<
         Extract<TorrentControlMessage, { type: "FOUND" }>,
         "artifacts" | "control_id"
@@ -992,18 +994,37 @@ export class TorrentPeer extends TorrentDHTNode {
   }
 
   private _add_to_hosted(seeder: TorrentHostedObj, furrow?: TorrentHostedObj) {
-    const serialized_seeder = this.utils.serialize_hosted(seeder);
-    let s_value = this.hosted.get(serialized_seeder);
+    if (seeder.mode === "shadow" && !furrow) return;
 
-    if (!s_value) {
-      s_value = new Set();
-      this.hosted.set(serialized_seeder, s_value);
+    const { seeder: found_seeder, furrow: found_furrow } = this._search_hosted(
+      seeder,
+      furrow,
+    );
+    const new_serialized_seeder = this.utils.serialize_hosted(seeder);
+
+    if (found_seeder) {
+      const old_serialized_seeder = this.utils.serialize_hosted(found_seeder);
+      if (old_serialized_seeder !== new_serialized_seeder) {
+        const existing_set = this.hosted.get(old_serialized_seeder);
+        this.hosted.delete(old_serialized_seeder);
+        this.hosted.set(new_serialized_seeder, existing_set ?? new Set());
+      }
     }
 
-    if (furrow) {
-      const serialized_furrow = this.utils.serialize_hosted(furrow);
+    let s_value = this.hosted.get(new_serialized_seeder);
+    if (!s_value) {
+      s_value = new Set();
+      this.hosted.set(new_serialized_seeder, s_value);
+    }
 
-      if (!s_value.has(serialized_furrow)) s_value.add(serialized_furrow);
+    if (furrow && furrow.mode === "master") {
+      const serialized_furrow = this.utils.serialize_hosted(furrow);
+      if (found_furrow) {
+        const old_serialized_furrow = this.utils.serialize_hosted(found_furrow);
+        // remove old version - it's an overwrite
+        s_value.delete(old_serialized_furrow);
+      }
+      s_value.add(serialized_furrow);
     }
   }
 

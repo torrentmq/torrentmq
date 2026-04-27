@@ -314,6 +314,7 @@ export type TorrentHostedObj =
       name: string;
       pub_key: JsonWebKey;
       cert?: TorrentSeederCertificate;
+      mode: TorrentSeederFurrowMode;
       properties?: TorrentSeederParams | TorrentFurrowParams;
     }
   | {
@@ -321,6 +322,7 @@ export type TorrentHostedObj =
       name: string;
       pub_key?: never;
       cert: TorrentSeederCertificate;
+      mode: TorrentSeederFurrowMode;
       properties?: TorrentSeederParams | TorrentFurrowParams;
     };
 

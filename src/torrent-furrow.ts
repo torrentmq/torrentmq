@@ -298,6 +298,8 @@ export class TorrentFurrow extends TorrentEmitter<
       // if we receive a key from another root, we step down
       if (this.mode === "master") {
         this.mode = "shadow";
+        // force remove from list of hosted furrows
+        this.emit("furrow_demoted", { id: this.identifier, name: this.name });
         this.start_intervals(); // re-syncs intervals to shadow mode
       }
     });
@@ -366,15 +368,17 @@ export class TorrentFurrow extends TorrentEmitter<
   private promote_to_root() {
     if (this.mode === "master") return;
     this.mode = "master";
-    this.emit("furrow_promoted", { id: this.identifier, name: this.name });
 
     const pub_key = this.pub_key;
     const cert = this.cert ?? undefined;
 
-    this.emit("furrow_promoted", {
+    this.emit<{
+      furrow: TorrentHostedObj;
+    }>("furrow_promoted", {
       furrow: {
         id: this.identifier,
         name: this.name,
+        mode: this.mode,
         ...(cert ? { cert } : { pub_key }),
         ...(this.options && Object.keys(this.options).length > 0
           ? { properties: { ...this.options } }

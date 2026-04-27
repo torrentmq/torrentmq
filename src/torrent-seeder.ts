@@ -205,10 +205,14 @@ export class TorrentSeeder extends TorrentEmitter<
         const pub_key = this.pub_key;
         const cert = this.cert ?? undefined;
 
-        this.emit("furrow_promoted", {
+        this.emit<{
+          seeder: TorrentHostedObj;
+          furrow: TorrentHostedObj;
+        }>("furrow_promoted", {
           seeder: {
             id: this.identifier,
             name: this.name,
+            mode: this.mode,
             ...(cert ? { cert } : { pub_key }),
             ...(this.options && Object.keys(this.options).length > 0
               ? { properties: { ...this.options } }
@@ -234,6 +238,7 @@ export class TorrentSeeder extends TorrentEmitter<
         id: this.identifier,
         name: this.name,
         pub_key: this.pub_key,
+        mode: this.mode,
         ...(this.options && Object.keys(this.options).length > 0
           ? { properties: { ...this.options } }
           : {}),
@@ -242,6 +247,7 @@ export class TorrentSeeder extends TorrentEmitter<
         id: furrow.identifier,
         name: furrow.name,
         pub_key: furrow.pub_key,
+        mode: furrow.get_mode(),
         ...(furrow.options && Object.keys(furrow.options).length > 0
           ? { properties: { ...furrow.options } }
           : {}),
@@ -272,6 +278,7 @@ export class TorrentSeeder extends TorrentEmitter<
       // if we receive a key from another root, we step down
       if (this.mode === "master") {
         this.mode = "shadow";
+        this.emit("seeder_demoted", { id: this.identifier, name: this.name });
         this.start_intervals(); // re-syncs intervals to follower mode
       }
     });
@@ -338,10 +345,13 @@ export class TorrentSeeder extends TorrentEmitter<
     const pub_key = this.pub_key;
     const cert = this.cert ?? undefined;
 
-    this.emit("seeder_promoted", {
+    this.emit<{
+      seeder: TorrentHostedObj;
+    }>("seeder_promoted", {
       seeder: {
         id: this.identifier,
         name: this.name,
+        mode: this.mode,
         ...(cert ? { cert } : { pub_key }),
         ...(this.options && Object.keys(this.options).length > 0
           ? { properties: { ...this.options } }
