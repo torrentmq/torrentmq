@@ -33,8 +33,8 @@ export class TorrentDHTNode extends TorrentEmitter<
   protected identity: TorrentIdentity;
   identifier: string = TorrentUtils.random_string(20);
 
-  readonly min_peer_cluster_size: number = 3;
-  readonly max_peer_cluster_size: number = 8;
+  readonly min_peer_cluster_size: number = 4;
+  readonly max_peer_cluster_size: number = 12;
   // frequency of sampling new peers
   readonly partition_heal_interval: number = 30000;
   // how often to get status in ms

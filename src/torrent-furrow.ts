@@ -10,7 +10,7 @@ import {
   TorrentHostedObj,
   TorrentMessageBody,
   TorrentMessageParams,
-  TorrentSeederCertificate,
+  TorrentCertificate,
   TorrentSeederFurrowMode,
   TorrentSeederFurrowSecurityObject,
 } from "./torrent-types";
@@ -27,7 +27,7 @@ export class TorrentFurrow extends TorrentEmitter<
   private routing_key: string | undefined;
 
   pub_key: JsonWebKey;
-  cert?: TorrentSeederCertificate;
+  cert?: TorrentCertificate;
   private mode: TorrentSeederFurrowMode = "master";
 
   identity: TorrentIdentity;

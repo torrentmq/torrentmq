@@ -113,7 +113,7 @@ export type TorrentControlOriginSeeder = TorrentControlSeederOrFurrow & {
 };
 
 export type TorrentControlCertifiedSeeder = TorrentControlSeederOrFurrow & {
-  cert: TorrentSeederCertificate;
+  cert: TorrentCertificate;
 };
 
 export type TorrentControlSeeder =
@@ -145,7 +145,7 @@ type TorrentControlPeerBindInfo = {
   furrow?: TorrentControlBindFurrow;
 };
 
-export type TorrentSeederCertificate = {
+export type TorrentCertificate = {
   pub_key: string;
   exp: number;
   scope: {
@@ -285,24 +285,14 @@ export type TorrentFurrowBindingBrand = TorrentBrand<
   "FurrowBindingKey"
 >;
 
-export type TorrentSeederBindingObj =
-  | {
-      id: string;
-      name: string;
-      pub_key?: JsonWebKey;
-      swarm_key?: ArrayBuffer;
-    }
-  | {
-      id: string;
-      name: string;
-      cert?: TorrentSeederCertificate;
-      swarm_key?: ArrayBuffer;
-    };
+export type TorrentSeederBindingObj = {
+  id: string;
+  name: string;
+};
 
 export type TorrentFurrowBindingObj = {
   id: string;
   name: string;
-  pub_key?: JsonWebKey;
   routing_key: string;
 };
 
@@ -313,7 +303,7 @@ export type TorrentHostedObj =
       id: string;
       name: string;
       pub_key: JsonWebKey;
-      cert?: TorrentSeederCertificate;
+      cert?: TorrentCertificate;
       mode: TorrentSeederFurrowMode;
       properties?: TorrentSeederParams | TorrentFurrowParams;
     }
@@ -321,7 +311,7 @@ export type TorrentHostedObj =
       id: string;
       name: string;
       pub_key?: never;
-      cert: TorrentSeederCertificate;
+      cert: TorrentCertificate;
       mode: TorrentSeederFurrowMode;
       properties?: TorrentSeederParams | TorrentFurrowParams;
     };

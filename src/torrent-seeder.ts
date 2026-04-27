@@ -9,7 +9,7 @@ import {
   TorrentMessageParams,
   TorrentSeederParams,
   TorrentHostedObj,
-  TorrentSeederCertificate,
+  TorrentCertificate,
   TorrentSeederFurrowSecurityObject,
   TorrentSeederFurrowMode,
 } from "./torrent-types";
@@ -30,7 +30,7 @@ export class TorrentSeeder extends TorrentEmitter<
   pub_key: JsonWebKey;
   // when in follower mode request a cerificate from the "master"
   // or are certificates just not worth it?
-  cert?: TorrentSeederCertificate;
+  cert?: TorrentCertificate;
   private mode: TorrentSeederFurrowMode = "master";
 
   identity: TorrentIdentity;
