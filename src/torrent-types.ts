@@ -1,6 +1,8 @@
 import { TorrentIdentity } from "./torrent-identity";
 import { TorrentMessage } from "./torrent-message";
 
+export type TorrentSeederFurrowMode = "master" | "shadow";
+
 export type TorrentSeederFurrowSecurityObject = {
   identifier: string;
   identity: TorrentIdentity;
@@ -311,15 +313,15 @@ export type TorrentHostedObj =
       id: string;
       name: string;
       pub_key: JsonWebKey;
-      cert?: never;
-      properties?: TorrentSeederParams;
+      cert?: TorrentSeederCertificate;
+      properties?: TorrentSeederParams | TorrentFurrowParams;
     }
   | {
       id: string;
       name: string;
       pub_key?: never;
       cert: TorrentSeederCertificate;
-      properties?: TorrentSeederParams;
+      properties?: TorrentSeederParams | TorrentFurrowParams;
     };
 
 export type TorrentSerializableOrDeserializableBindingObj =

@@ -11,18 +11,27 @@ import {
   TorrentHostedObj,
   TorrentSeederCertificate,
   TorrentSeederFurrowSecurityObject,
+  TorrentSeederFurrowMode,
 } from "./torrent-types";
 import { TorrentUtils } from "./torrent-utils";
 
-export class TorrentSeeder extends TorrentEmitter<"created_furrow"> {
+export class TorrentSeeder extends TorrentEmitter<
+  | "created_furrow"
+  | "seeder_promoted"
+  | "seeder_demoted"
+  | "furrow_promoted"
+  | "furrow_demoted"
+> {
   identifier: string;
   readonly peer: TorrentPeer;
 
   furrows: TorrentFurrow[] = [];
 
   pub_key: JsonWebKey;
+  // when in follower mode request a cerificate from the "master"
+  // or are certificates just not worth it?
   cert?: TorrentSeederCertificate;
-  is_root: boolean = true;
+  protected mode: TorrentSeederFurrowMode = "master";
 
   identity: TorrentIdentity;
   swarm_key: ArrayBuffer;
@@ -152,7 +161,7 @@ export class TorrentSeeder extends TorrentEmitter<"created_furrow"> {
           },
         };
 
-        if (this.is_root)
+        if (this.mode === "master")
           this.identity.sign(encrypted_message_body).then((signature) => {
             this.peer.publish({
               ...send_message,
@@ -191,6 +200,31 @@ export class TorrentSeeder extends TorrentEmitter<"created_furrow"> {
     const furrow = await TorrentFurrow.create(this, options, name);
     this.furrows.push(furrow);
 
+    furrow.on({
+      furrow_promoted: ({ furrow }: { furrow: TorrentHostedObj }) => {
+        const pub_key = this.pub_key;
+        const cert = this.cert ?? undefined;
+
+        this.emit("furrow_promoted", {
+          seeder: {
+            id: this.identifier,
+            name: this.name,
+            ...(cert ? { cert } : { pub_key }),
+            ...(this.options && Object.keys(this.options).length > 0
+              ? { properties: { ...this.options } }
+              : {}),
+          },
+          furrow,
+        });
+      },
+      furrow_demoted: ({ id, name }: { id: string; name: string }) => {
+        this.emit("furrow_demoted", {
+          seeder: { id: this.identifier, name: this.name },
+          furrow: { id, name },
+        });
+      },
+    });
+
     // emit created furrow to update hosted
     this.emit<{
       seeder: TorrentHostedObj;
@@ -221,6 +255,10 @@ export class TorrentSeeder extends TorrentEmitter<"created_furrow"> {
     return this.swarm_key;
   }
 
+  get_mode() {
+    return this.mode;
+  }
+
   private setup_event_listeners() {
     this.peer.on<{
       seeder: TorrentHostedObj & { swarm_key: ArrayBuffer };
@@ -232,8 +270,8 @@ export class TorrentSeeder extends TorrentEmitter<"created_furrow"> {
       this.swarm_key = seeder.swarm_key;
 
       // if we receive a key from another root, we step down
-      if (this.is_root) {
-        this.is_root = false;
+      if (this.mode === "master") {
+        this.mode = "shadow";
         this.start_intervals(); // re-syncs intervals to follower mode
       }
     });
@@ -243,7 +281,7 @@ export class TorrentSeeder extends TorrentEmitter<"created_furrow"> {
       "seeder_pulse",
       ({ id, name }) => {
         if (id === this.identifier && name === this.name) {
-          if (this.is_root) this.demote_from_root();
+          if (this.mode === "master") this.demote_from_root();
           else this.reset_watchdog();
         }
       },
@@ -253,8 +291,14 @@ export class TorrentSeeder extends TorrentEmitter<"created_furrow"> {
   private start_intervals() {
     this.stop_all_timers();
 
-    if (this.is_root) {
+    if (this.mode === "master") {
+      let first_cycle = true;
       this.key_refresh_interval = setInterval(async () => {
+        if (first_cycle === true) {
+          first_cycle = false;
+          return;
+        }
+
         this.swarm_key = await TorrentUtils._generate_swarm_key();
         this.peer.swarm_key_refresh({ id: this.identifier, name: this.name });
       }, this.options.key_refresh ?? 600000);
@@ -288,8 +332,23 @@ export class TorrentSeeder extends TorrentEmitter<"created_furrow"> {
   }
 
   private promote_to_root() {
-    if (this.is_root) return;
-    this.is_root = true;
+    if (this.mode === "master") return;
+    this.mode = "master";
+
+    const pub_key = this.pub_key;
+    const cert = this.cert ?? undefined;
+
+    this.emit("seeder_promoted", {
+      seeder: {
+        id: this.identifier,
+        name: this.name,
+        ...(cert ? { cert } : { pub_key }),
+        ...(this.options && Object.keys(this.options).length > 0
+          ? { properties: { ...this.options } }
+          : {}),
+      },
+    });
+
     this.start_intervals();
 
     // use pulse to signal dominance
@@ -297,8 +356,9 @@ export class TorrentSeeder extends TorrentEmitter<"created_furrow"> {
   }
 
   private demote_from_root() {
-    if (!this.is_root) return;
-    this.is_root = false;
+    if (this.mode === "shadow") return;
+    this.mode = "shadow";
+    this.emit("seeder_demoted", { id: this.identifier, name: this.name });
     this.stop_all_timers();
     this.reset_watchdog();
   }

@@ -91,12 +91,41 @@ export class TorrentPeer extends TorrentDHTNode {
         : {}),
     });
 
-    seeder.on<{
-      seeder: TorrentHostedObj;
-      furrow: TorrentHostedObj;
-    }>("created_furrow", (data) => {
-      if (this.hosted.has(this.utils.serialize_hosted(data.seeder)))
-        this._add_to_hosted(data.seeder, data.furrow);
+    seeder.on({
+      seeder_promoted: ({ seeder }: { seeder: TorrentHostedObj }) => {
+        this._add_to_hosted(seeder);
+      },
+      seeder_demoted: ({ name }: { id: string; name: string }) => {
+        this._remove_from_hosted(name);
+      },
+      furrow_promoted: ({
+        seeder,
+        furrow,
+      }: {
+        seeder: TorrentHostedObj;
+        furrow: TorrentHostedObj;
+      }) => {
+        this._add_to_hosted(seeder, furrow);
+      },
+      furrow_demoted: ({
+        seeder,
+        furrow,
+      }: {
+        seeder: { id: string; name: string };
+        furrow: { id: string; name: string };
+      }) => {
+        this._remove_from_hosted(seeder.name, furrow.name);
+      },
+      created_furrow: ({
+        seeder,
+        furrow,
+      }: {
+        seeder: TorrentHostedObj;
+        furrow: TorrentHostedObj;
+      }) => {
+        if (this.hosted.has(this.utils.serialize_hosted(seeder)))
+          this._add_to_hosted(seeder, furrow);
+      },
     });
 
     return seeder;
@@ -584,7 +613,7 @@ export class TorrentPeer extends TorrentDHTNode {
     );
 
     const message_signer = furrow ?? seeder;
-    if (!message_signer.is_root) return;
+    if (message_signer.get_mode() === "shadow") return;
 
     const signature = await message_signer.identity.sign(
       encrypted_message_body,
@@ -737,9 +766,11 @@ export class TorrentPeer extends TorrentDHTNode {
         TorrentUtils.from_base64_url(msg.encrypted.swarm_key),
         aes_key.aes_key,
       );
-      // do something with swarm_key
+
+      // we r no longer "master" no don't list as hosted
       this._remove_from_hosted(msg.seeder.name, msg.furrow?.name);
 
+      // do something with swarm_key
       this.emit("swarm_key_exchanged", {
         seeder: {
           ...msg.seeder,
@@ -977,26 +1008,28 @@ export class TorrentPeer extends TorrentDHTNode {
   }
 
   // Remove a furrow from a seeder, remove seeder if no furrows remain
-  private _remove_from_hosted(seeder: string, furrow?: string) {
-    for (const [seeder_item, furrow_set] of this.hosted) {
-      const seeder_deserialized = this.utils.deserialize_hosted(seeder_item);
+  private _remove_from_hosted(seeder_search: string, furrow_search?: string) {
+    const trimmed_seeder = seeder_search.trim();
+    const trimmed_furrow = furrow_search?.trim();
+
+    for (const [seeder_key, furrow_set] of this.hosted) {
+      const seeder_obj = this.utils.deserialize_hosted(seeder_key);
 
       if (
-        seeder_deserialized.name.trim() === seeder.trim() ||
-        seeder_deserialized.id.trim() === seeder.trim()
+        seeder_obj.name.trim() === trimmed_seeder ||
+        seeder_obj.id.trim() === trimmed_seeder
       ) {
-        if (furrow)
-          for (const furrow_item of furrow_set) {
-            const furrow_deserialized =
-              this.utils.deserialize_hosted(furrow_item);
+        if (trimmed_furrow)
+          for (const furrow_key of furrow_set) {
+            const furrow_obj = this.utils.deserialize_hosted(furrow_key);
 
             if (
-              furrow_deserialized.name.trim() === furrow.trim() ||
-              furrow_deserialized.id.trim() === furrow.trim()
+              furrow_obj.name.trim() === trimmed_furrow ||
+              furrow_obj.id.trim() === trimmed_furrow
             )
-              furrow_set.delete(furrow_item);
+              furrow_set.delete(furrow_key);
           }
-        else this.hosted.delete(seeder_item);
+        else this.hosted.delete(seeder_key);
       }
     }
   }
