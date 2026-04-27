@@ -23,9 +23,12 @@ export class TorrentFurrow extends TorrentEmitter<
   protected readonly seeder: TorrentSeeder;
 
   is_planted: boolean | "unset" = "unset";
+  is_bound: boolean = false;
+  private routing_key: string | undefined;
+
   pub_key: JsonWebKey;
   cert?: TorrentSeederCertificate;
-  protected mode: TorrentSeederFurrowMode = "master";
+  private mode: TorrentSeederFurrowMode = "master";
 
   identity: TorrentIdentity;
   protected swarm_key: ArrayBuffer;
@@ -247,6 +250,9 @@ export class TorrentFurrow extends TorrentEmitter<
   }
 
   bind(routing_key?: string) {
+    if (routing_key) this.routing_key = routing_key;
+    this.is_bound = true;
+
     this.seeder.peer.register_remote_binding(
       {
         id: this.seeder.identifier,
@@ -262,6 +268,9 @@ export class TorrentFurrow extends TorrentEmitter<
   }
 
   unbind(routing_key?: string) {
+    if (routing_key) this.routing_key = routing_key;
+    this.is_bound = false;
+
     this.seeder.peer.unregister_remote_binding(
       {
         id: this.seeder.identifier,
@@ -292,6 +301,8 @@ export class TorrentFurrow extends TorrentEmitter<
       if (!furrow || this.name !== furrow.name) return;
       if (seeder.id !== this.seeder.identifier) return;
 
+      if (this.is_bound) this.unbind(this.routing_key);
+
       this.identifier = furrow.id;
       this.swarm_key = furrow.swarm_key;
 
@@ -302,6 +313,8 @@ export class TorrentFurrow extends TorrentEmitter<
         this.emit("furrow_demoted", { id: this.identifier, name: this.name });
         this.start_intervals(); // re-syncs intervals to shadow mode
       }
+
+      this.bind(this.routing_key);
     });
 
     // pulse monitoring for failover

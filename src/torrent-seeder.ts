@@ -31,7 +31,7 @@ export class TorrentSeeder extends TorrentEmitter<
   // when in follower mode request a cerificate from the "master"
   // or are certificates just not worth it?
   cert?: TorrentSeederCertificate;
-  protected mode: TorrentSeederFurrowMode = "master";
+  private mode: TorrentSeederFurrowMode = "master";
 
   identity: TorrentIdentity;
   swarm_key: ArrayBuffer;
