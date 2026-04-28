@@ -15,7 +15,8 @@ export class TorrentDHTNode extends TorrentEmitter<
   | TorrentEventName
   | "control_message"
   | "status_update"
-  | "swarm_key_exchanged"
+  | "eph_exchange_init"
+  | "eph_exchange_complete"
   | "seeder_pulse"
   | "furrow_pulse"
 > {
@@ -93,7 +94,7 @@ export class TorrentDHTNode extends TorrentEmitter<
           from: this.identifier,
         };
         this.signaller.send(hello_broadcast);
-        this.emit("peer_connected", { peer_id: this.identifier });
+        this.emit("signaller_connected");
       } catch (e) {
         console.warn("Failed to send HELO via signaller", e);
       }

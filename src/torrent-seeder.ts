@@ -31,6 +31,7 @@ export class TorrentSeeder extends TorrentEmitter<
   // when in follower mode request a cerificate from the "master"
   // or are certificates just not worth it?
   cert?: TorrentCertificate;
+  private is_exchanging: boolean = false;
   private mode: TorrentSeederFurrowMode = "master";
 
   identity: TorrentIdentity;
@@ -112,7 +113,7 @@ export class TorrentSeeder extends TorrentEmitter<
     // call find to start search
     peer.find({
       id: identifier,
-      name: this.name,
+      name,
     });
 
     return seeder;
@@ -266,11 +267,19 @@ export class TorrentSeeder extends TorrentEmitter<
   }
 
   private setup_event_listeners() {
+    this.peer.on<{ id: string; name: string }>(
+      "eph_exchange_init",
+      ({ name }) => {
+        if (name === this.name) this.is_exchanging = true;
+      },
+    );
+
     this.peer.on<{
       seeder: TorrentHostedObj & { swarm_key: ArrayBuffer };
       furrow?: TorrentHostedObj & { swarm_key: ArrayBuffer };
-    }>("swarm_key_exchanged", ({ seeder }) => {
+    }>("eph_exchange_complete", ({ seeder }) => {
       if (this.name !== seeder.name) return;
+      this.is_exchanging = false;
 
       this.identifier = seeder.id;
       this.swarm_key = seeder.swarm_key;
@@ -287,7 +296,13 @@ export class TorrentSeeder extends TorrentEmitter<
     this.peer.on<{ id: string; name: string }>(
       "seeder_pulse",
       ({ id, name }) => {
-        if (id === this.identifier && name === this.name) {
+        if (name === this.name && !this.is_exchanging) {
+          if (this.identifier.localeCompare(id) < 0)
+            this.peer.find({
+              id: this.identifier,
+              name: this.name,
+            });
+
           if (this.mode === "master") this.demote_from_root();
           else this.reset_watchdog();
         }

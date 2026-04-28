@@ -52,7 +52,7 @@ export class TorrentPeer extends TorrentDHTNode {
     );
 
     this.on<{ peer_id: string }>(
-      "peer_connected",
+      "signaller_connected",
       () => (this.is_connected = true),
     );
   }
@@ -773,7 +773,7 @@ export class TorrentPeer extends TorrentDHTNode {
       this._remove_from_hosted(msg.seeder.name, msg.furrow?.name);
 
       // do something with swarm_key
-      this.emit("swarm_key_exchanged", {
+      this.emit("eph_exchange_complete", {
         seeder: {
           ...msg.seeder,
           // dont add swarm_key as it is for the furrow
@@ -801,6 +801,8 @@ export class TorrentPeer extends TorrentDHTNode {
     this.eph_aes_keys.set(furrow ? furrow.id : seeder.id, {
       ephemeral: eph_key,
     });
+
+    this.emit("eph_exchange_init", furrow ? { ...furrow } : { ...seeder });
 
     const eph_offer_msg: Omit<
       Extract<TorrentControlMessage, { type: "EPH_KEY_OFFER" }>,

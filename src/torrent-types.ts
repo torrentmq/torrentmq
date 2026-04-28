@@ -85,6 +85,7 @@ export type TorrentMessageParams = {
 };
 
 export type TorrentEventName =
+  | "signaller_connected"
   | "peer_connected"
   | "peer_disconnected"
   | "bind"

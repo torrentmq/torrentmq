@@ -28,6 +28,7 @@ export class TorrentFurrow extends TorrentEmitter<
 
   pub_key: JsonWebKey;
   cert?: TorrentCertificate;
+  private is_exchanging: boolean = false;
   private mode: TorrentSeederFurrowMode = "master";
 
   identity: TorrentIdentity;
@@ -294,12 +295,19 @@ export class TorrentFurrow extends TorrentEmitter<
   }
 
   private setup_event_listeners() {
+    this.seeder.peer.on<{ id: string; name: string }>(
+      "eph_exchange_init",
+      ({ name }) => {
+        if (name === this.name) this.is_exchanging = true;
+      },
+    );
+
     this.seeder.peer.on<{
       seeder: TorrentHostedObj & { swarm_key: ArrayBuffer };
       furrow?: TorrentHostedObj & { swarm_key: ArrayBuffer };
-    }>("swarm_key_exchanged", ({ seeder, furrow }) => {
+    }>("eph_exchange_complete", ({ furrow }) => {
       if (!furrow || this.name !== furrow.name) return;
-      if (seeder.id !== this.seeder.identifier) return;
+      this.is_exchanging = false;
 
       if (this.is_bound) this.unbind(this.routing_key);
 
@@ -321,7 +329,19 @@ export class TorrentFurrow extends TorrentEmitter<
     this.seeder.peer.on<{ id: string; name: string }>(
       "furrow_pulse",
       ({ id, name }) => {
-        if (id === this.identifier && name === this.name) {
+        if (name === this.name && !this.is_exchanging) {
+          if (this.identifier.localeCompare(id) < 0)
+            this.seeder.peer.find(
+              {
+                id: this.seeder.identifier,
+                name: this.seeder.name,
+              },
+              {
+                id: this.identifier,
+                name: this.name,
+              },
+            );
+
           if (this.mode === "master") this.demote_from_root();
           else this.reset_watchdog();
         }
