@@ -90,8 +90,6 @@ export type TorrentEventName =
   | "peer_disconnected"
   | "bind"
   | "unbind"
-  | "peer_bind"
-  | "peer_unbind"
   | "publish"
   | "message_receive"
   | "found"
@@ -138,12 +136,9 @@ type TorrentControlPeerInfo = {
   };
 };
 
-type TorrentControlPeerBindInfo = {
-  control_id: string;
-  from: string;
-  to?: string;
-  seeder: TorrentControlSeederOrFurrow;
-  furrow?: TorrentControlBindFurrow;
+export type TorrentBrokerManifest = {
+  seeder: TorrentSeederBindingBrand;
+  furrows: TorrentFurrowBindingBrand[];
 };
 
 export type TorrentCertificate = {
@@ -160,8 +155,13 @@ export type TorrentCertificate = {
 type TorrentSeederPermissions = "sign" | "verify";
 
 export type TorrentControlMessage =
-  | (TorrentControlPeerBindInfo & { type: "ANNOUNCE_BIND" })
-  | (TorrentControlPeerBindInfo & { type: "ANNOUNCE_UNBIND" })
+  | {
+      control_id: string;
+      from: string;
+      to?: string;
+      type: "BROKER_MANIFEST";
+      manifest: string;
+    }
   | (TorrentControlPeerInfo & {
       type: "PUBLISH";
       message: TorrentMessageObject;
@@ -176,9 +176,9 @@ export type TorrentControlMessage =
   | (TorrentControlPeerInfo & { type: "FIND" })
   | (TorrentControlPeerInfo & { type: "NOT_FOUND" })
   | (TorrentControlPeerInfo & {
+      type: "FOUND";
       seeder: TorrentHostedObj;
       furrow?: TorrentHostedObj;
-      type: "FOUND";
     })
   // key shit for exchange (seeder <-> peer)
   // routes through the peer hosting the seeder
@@ -211,7 +211,7 @@ export type TorrentControlMessage =
   | {
       control_id: string;
       from: string;
-      to: string;
+      to?: string;
       type: "LRU_STORE";
       lru: string;
     };

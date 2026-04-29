@@ -17,6 +17,7 @@ import {
   TorrentControlBindFurrow,
   TorrentControlFurrow,
   TorrentMessageObjectWithoutSig,
+  TorrentBrokerManifest,
 } from "./torrent-types";
 import { TorrentUtils } from "./torrent-utils";
 
@@ -222,7 +223,7 @@ export class TorrentPeer extends TorrentDHTNode {
     furrow: TorrentControlBindFurrow,
   ) {
     this._bind_seeder_or_furrow(seeder, furrow);
-    this._send_simple("ANNOUNCE_BIND", seeder, furrow);
+    this._send_manifest();
     this.emit("bind", { seeder, furrow });
   }
 
@@ -231,7 +232,7 @@ export class TorrentPeer extends TorrentDHTNode {
     furrow: TorrentControlBindFurrow,
   ) {
     this._unbind_seeder_or_furrow(seeder, furrow);
-    this._send_simple("ANNOUNCE_UNBIND", seeder, furrow);
+    this._send_manifest();
     this.emit("unbind", { seeder, furrow });
   }
 
@@ -239,37 +240,14 @@ export class TorrentPeer extends TorrentDHTNode {
     seeder: TorrentControlSeederOrFurrow,
     furrow?: TorrentControlSeederOrFurrow,
   ) {
-    this._send_simple("SWARM_KEY_REFRESH", seeder, furrow);
+    this._send_intermittent("SWARM_KEY_REFRESH", seeder, furrow);
   }
 
   send_pulse(
     seeder: TorrentControlSeederOrFurrow,
     furrow?: TorrentControlSeederOrFurrow,
   ) {
-    this._send_simple("PULSE", seeder, furrow);
-  }
-
-  private _send_simple<
-    T extends Extract<
-      TorrentControlMessage["type"],
-      "ANNOUNCE_BIND" | "ANNOUNCE_UNBIND" | "PULSE" | "SWARM_KEY_REFRESH"
-    >,
-  >(
-    type: T,
-    seeder: TorrentControlSeederOrFurrow | TorrentControlSeeder,
-    furrow?: TorrentControlSeederOrFurrow | TorrentControlBindFurrow,
-  ) {
-    const control: Omit<
-      Extract<TorrentControlMessage, { type: T }>,
-      "artifacts" | "control_id"
-    > = {
-      type,
-      from: this.identifier,
-      seeder,
-      furrow,
-    } as any; // Cast used here because TS is such a whining bitch
-
-    this._broadcast_control(control);
+    this._send_intermittent("PULSE", seeder, furrow);
   }
 
   //  NOTE: All control traffic to DCs only. WebSocket signaling is used only for HELO/OFFER/ANSWER/ICE etc.
@@ -324,13 +302,8 @@ export class TorrentPeer extends TorrentDHTNode {
     if (control.to && control.to !== this.identifier) return;
 
     switch (control.type) {
-      case "ANNOUNCE_BIND": {
-        this._handle_bind(control);
-        break;
-      }
-
-      case "ANNOUNCE_UNBIND": {
-        this._handle_unbind(control);
+      case "BROKER_MANIFEST": {
+        this._handle_broker_manifest(control);
         break;
       }
 
@@ -372,7 +345,7 @@ export class TorrentPeer extends TorrentDHTNode {
       {
         type: Exclude<
           TorrentControlMessage["type"],
-          "ANNOUNCE_BIND" | "ANNOUNCE_UNBIND" | "LRU_STORE"
+          "BROKER_MANIFEST" | "LRU_STORE"
         >;
       }
     >,
@@ -461,78 +434,25 @@ export class TorrentPeer extends TorrentDHTNode {
     }
   }
 
-  private _handle_bind(
-    msg: Extract<TorrentControlMessage, { type: "ANNOUNCE_BIND" }>,
+  private _handle_broker_manifest(
+    msg: Extract<TorrentControlMessage, { type: "BROKER_MANIFEST" }>,
   ) {
     // ensure peer entry has bb map
     const peer = this.connected_peers.get(msg.from);
     if (peer && !peer.bb) peer.bb = new Map();
     if (!peer?.bb) return;
 
-    const seeder_key: TorrentSeederBindingObj = {
-      id: msg.seeder.id,
-      name: msg.seeder.name,
-    };
-    let furrow_set = peer.bb.get(this.utils.serialize_binding(seeder_key));
+    const manifest: TorrentBrokerManifest[] = TorrentUtils.from_array_buffer(
+      TorrentUtils.from_base64_url(msg.manifest),
+    );
 
-    if (!furrow_set) {
-      // If no furrows are bound to this seeder yet, create a new Set
-      furrow_set = new Set();
-      peer.bb.set(this.utils.serialize_binding(seeder_key), furrow_set);
+    peer.bb.clear();
+
+    for (const entry of manifest) {
+      // Reconstruct the Set to match your internal Map<string, Set<string>> type
+      const furrow_set = new Set(entry.furrows);
+      peer.bb.set(entry.seeder, furrow_set);
     }
-
-    // If a furrow is provided, add the furrow to the set for this seeder
-    if (msg.furrow?.id && msg.furrow?.name) {
-      const furrow_key: TorrentFurrowBindingObj = {
-        id: msg.furrow.id,
-        name: msg.furrow.name,
-        routing_key: msg.furrow.routing_key ?? msg.from,
-      };
-
-      furrow_set.add(this.utils.serialize_binding(furrow_key));
-    }
-
-    this.emit("peer_bind", {
-      seeder: msg.seeder,
-      furrow: msg.furrow,
-      peer_id: msg.from,
-    });
-  }
-
-  private _handle_unbind(
-    msg: Extract<TorrentControlMessage, { type: "ANNOUNCE_UNBIND" }>,
-  ) {
-    // ensure peer entry has bb map
-    const peer = this.connected_peers.get(msg.from);
-    if (peer && !peer.bb) peer.bb = new Map();
-    if (!peer?.bb) return;
-
-    const seeder_key: TorrentSeederBindingObj = {
-      id: msg.seeder.id,
-      name: msg.seeder.name,
-    };
-    let furrow_set = peer.bb.get(this.utils.serialize_binding(seeder_key));
-
-    if (furrow_set && msg.furrow)
-      if (msg.furrow?.id && msg.furrow?.name) {
-        const furrow_key: TorrentFurrowBindingObj = {
-          id: msg.furrow.id,
-          name: msg.furrow.name,
-          routing_key: msg.furrow.routing_key ?? msg.from ?? "",
-        };
-        // Remove furrow
-        furrow_set?.delete(this.utils.serialize_binding(furrow_key));
-      }
-
-    if (!msg.furrow)
-      // Remove seeder
-      peer.bb.delete(this.utils.serialize_binding(seeder_key));
-
-    this.emit("peer_unbind", {
-      seeder: msg.seeder,
-      furrow: msg.furrow,
-      peer_id: msg.from,
-    });
   }
 
   private _handle_receive(
@@ -954,11 +874,7 @@ export class TorrentPeer extends TorrentDHTNode {
     // "Wash" the message to remove undefineds and normalize types
     const cleaned_control = JSON.parse(JSON.stringify(control));
 
-    if (
-      control.type !== "ANNOUNCE_BIND" &&
-      control.type !== "ANNOUNCE_UNBIND" &&
-      control.type !== "LRU_STORE"
-    ) {
+    if (control.type !== "BROKER_MANIFEST" && control.type !== "LRU_STORE") {
       const msg_bytes = TorrentUtils.to_array_buffer(cleaned_control);
       const signature = await this.identity.sign(msg_bytes);
       const pub_key = await this.identity.export_public_jwk();
@@ -1169,6 +1085,51 @@ export class TorrentPeer extends TorrentDHTNode {
       return;
     }
     this.broker_bindings.delete(this.utils.serialize_binding(seeder_key));
+  }
+
+  private async _send_manifest() {
+    const bb_array = Array.from(this.broker_bindings).map(
+      ([seeder, furrowSet]) => ({
+        seeder,
+        furrows: Array.from(furrowSet),
+      }),
+    );
+    const bb_array_buffer = TorrentUtils.to_array_buffer(bb_array);
+    const bb_base64 = TorrentUtils.to_base64_url(bb_array_buffer);
+
+    const bb_msg: Omit<
+      Extract<TorrentControlMessage, { type: "BROKER_MANIFEST" }>,
+      "control_id"
+    > = {
+      type: "BROKER_MANIFEST",
+      from: this.identifier,
+      manifest: bb_base64,
+    };
+
+    this._broadcast_control(bb_msg);
+  }
+
+  private _send_intermittent<
+    T extends Extract<
+      TorrentControlMessage["type"],
+      "PULSE" | "SWARM_KEY_REFRESH"
+    >,
+  >(
+    type: T,
+    seeder: TorrentControlSeederOrFurrow | TorrentControlSeeder,
+    furrow?: TorrentControlSeederOrFurrow | TorrentControlBindFurrow,
+  ) {
+    const control: Omit<
+      Extract<TorrentControlMessage, { type: T }>,
+      "artifacts" | "control_id"
+    > = {
+      type,
+      from: this.identifier,
+      seeder,
+      furrow,
+    } as any; // Cast used here because TS is such a whining bitch
+
+    this._broadcast_control(control);
   }
 
   private async _execute_eph_exchange(
