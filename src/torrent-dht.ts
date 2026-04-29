@@ -15,6 +15,7 @@ export class TorrentDHTNode extends TorrentEmitter<
   | TorrentEventName
   | "control_message"
   | "status_update"
+  | "swarm_key_exchanged"
   | "eph_exchange_init"
   | "eph_exchange_complete"
   | "seeder_pulse"
@@ -35,11 +36,11 @@ export class TorrentDHTNode extends TorrentEmitter<
   identifier: string = TorrentUtils.random_string(20);
 
   readonly min_peer_cluster_size: number = 4;
-  readonly max_peer_cluster_size: number = 12;
+  readonly max_peer_cluster_size: number = 8;
   // frequency of sampling new peers
-  readonly partition_heal_interval: number = 30000;
+  readonly partition_heal_interval: number = 60000;
   // how often to get status in ms
-  readonly status_frequency_check: number = 15000;
+  readonly status_frequency_check: number = 60000;
 
   protected last_partition_heal: number = Date.now();
 
@@ -169,18 +170,22 @@ export class TorrentDHTNode extends TorrentEmitter<
     const peer = this.connected_peers.get(to_peer_id);
     if (!peer) return;
 
-    for (const [, lru_node] of this.data_store.get_map()) {
-      const lru_msg: Extract<TorrentControlMessage, { type: "LRU_STORE" }> = {
-        control_id: TorrentUtils.random_string(),
-        type: "LRU_STORE",
-        from: this.identifier,
-        to: to_peer_id,
-        message: lru_node.value,
-      };
+    const lru_array = Array.from(this.data_store.get_map().values()).map(
+      (node) => node.value,
+    );
+    const lru_array_buffer = TorrentUtils.to_array_buffer(lru_array);
+    const lru_base64 = TorrentUtils.to_base64_url(lru_array_buffer);
 
-      if (peer.dc && peer.dc.readyState === "open")
-        peer.dc.send(JSON.stringify(lru_msg));
-    }
+    const lru_msg: Extract<TorrentControlMessage, { type: "LRU_STORE" }> = {
+      control_id: TorrentUtils.random_string(),
+      type: "LRU_STORE",
+      from: this.identifier,
+      to: to_peer_id,
+      lru: lru_base64,
+    };
+
+    if (peer.dc && peer.dc.readyState === "open")
+      peer.dc.send(JSON.stringify(lru_msg));
   }
 
   replicate_data(data: TorrentControlMessage, to_peer_id?: string) {

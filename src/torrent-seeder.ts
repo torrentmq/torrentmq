@@ -274,12 +274,18 @@ export class TorrentSeeder extends TorrentEmitter<
       },
     );
 
+    this.peer.on<{ id: string; name: string }>(
+      "eph_exchange_complete",
+      ({ name }) => {
+        if (name === this.name) this.is_exchanging = false;
+      },
+    );
+
     this.peer.on<{
       seeder: TorrentHostedObj & { swarm_key: ArrayBuffer };
       furrow?: TorrentHostedObj & { swarm_key: ArrayBuffer };
-    }>("eph_exchange_complete", ({ seeder }) => {
+    }>("swarm_key_exchanged", ({ seeder }) => {
       if (this.name !== seeder.name) return;
-      this.is_exchanging = false;
 
       this.identifier = seeder.id;
       this.swarm_key = seeder.swarm_key;
@@ -321,6 +327,7 @@ export class TorrentSeeder extends TorrentEmitter<
           return;
         }
 
+        if (this.is_exchanging) return;
         this.swarm_key = await TorrentUtils._generate_swarm_key();
         this.peer.swarm_key_refresh({ id: this.identifier, name: this.name });
       }, this.options.key_refresh ?? 600000);

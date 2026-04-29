@@ -65,27 +65,30 @@ export class TorrentUtils {
   }
 
   static to_base64_url(buffer: ArrayBuffer): string {
-    return btoa(String.fromCharCode(...new Uint8Array(buffer)))
+    const binary = new Uint8Array(buffer).reduce(
+      (data, byte) => data + String.fromCharCode(byte),
+      "",
+    );
+
+    return btoa(binary)
       .replace(/\+/g, "-")
       .replace(/\//g, "_")
       .replace(/=+$/, "");
   }
 
   static from_base64_url(base64url: string): ArrayBuffer {
-    // 1. Convert from base64url to standard base64
-    let base64 = base64url.replace(/-/g, "+").replace(/_/g, "/");
+    // Restore padding and replace URL-safe charaters
+    const base64 = base64url
+      .replace(/-/g, "+")
+      .replace(/_/g, "/")
+      .padEnd(base64url.length + ((4 - (base64url.length % 4)) % 4), "=");
 
-    // 2. Add padding if missing (Base64 strings must have length % 4 === 0)
-    const padLength = (4 - (base64.length % 4)) % 4;
-    base64 += "=".repeat(padLength);
+    const binary_string = atob(base64);
 
-    // 3. Decode Base64 string to binary string
-    const binaryString = atob(base64);
-
-    // 4. Convert binary string to Uint8Array
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
+    // Convert binary string to Uint8Array
+    const bytes = new Uint8Array(binary_string.length);
+    for (let i = 0; i < binary_string.length; i++) {
+      bytes[i] = binary_string.charCodeAt(i);
     }
 
     return bytes.buffer;

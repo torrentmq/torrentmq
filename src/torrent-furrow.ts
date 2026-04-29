@@ -302,12 +302,18 @@ export class TorrentFurrow extends TorrentEmitter<
       },
     );
 
+    this.seeder.peer.on<{ id: string; name: string }>(
+      "eph_exchange_complete",
+      ({ name }) => {
+        if (name === this.name) this.is_exchanging = false;
+      },
+    );
+
     this.seeder.peer.on<{
       seeder: TorrentHostedObj & { swarm_key: ArrayBuffer };
       furrow?: TorrentHostedObj & { swarm_key: ArrayBuffer };
-    }>("eph_exchange_complete", ({ furrow }) => {
+    }>("swarm_key_exchanged", ({ furrow }) => {
       if (!furrow || this.name !== furrow.name) return;
-      this.is_exchanging = false;
 
       if (this.is_bound) this.unbind(this.routing_key);
 
@@ -360,6 +366,7 @@ export class TorrentFurrow extends TorrentEmitter<
           return;
         }
 
+        if (this.is_exchanging) return;
         this.swarm_key = await TorrentUtils._generate_swarm_key();
         this.seeder.peer.swarm_key_refresh(
           { id: this.seeder.identifier, name: this.seeder.name },

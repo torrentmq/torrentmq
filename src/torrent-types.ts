@@ -213,7 +213,7 @@ export type TorrentControlMessage =
       from: string;
       to: string;
       type: "LRU_STORE";
-      message: TorrentControlMessage;
+      lru: string;
     };
 
 export type TorrentSignalMessage =

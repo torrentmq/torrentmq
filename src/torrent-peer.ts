@@ -722,23 +722,27 @@ export class TorrentPeer extends TorrentDHTNode {
     if (!found_seeder || !seeder) return;
     if (!seeder.identity) return;
 
-    if (!found_furrow)
+    if (!found_furrow) {
+      this.emit("eph_exchange_init", seeder);
       await this._execute_eph_exchange(
         seeder.identity,
         seeder.get_swarm_key(),
         msg,
       );
+    }
 
     // Send ephemeral offer for furrow if applicable
     if (!found_furrow || !msg.furrow) return;
     const furrow_msg = msg.furrow;
     const furrow = seeder.furrows.find((f) => f.identifier === furrow_msg.id);
-    if (furrow)
+    if (furrow) {
+      this.emit("eph_exchange_init", furrow);
       await this._execute_eph_exchange(
         furrow.identity,
         furrow.get_swarm_key(),
         msg,
       );
+    }
   }
 
   private async _handle_eph_exchange(
@@ -772,8 +776,9 @@ export class TorrentPeer extends TorrentDHTNode {
       // we r no longer "master" no don't list as hosted
       this._remove_from_hosted(msg.seeder.name, msg.furrow?.name);
 
+      this.emit("eph_exchange_complete", msg.furrow ?? msg.seeder);
       // do something with swarm_key
-      this.emit("eph_exchange_complete", {
+      this.emit("swarm_key_exchanged", {
         seeder: {
           ...msg.seeder,
           // dont add swarm_key as it is for the furrow
@@ -832,9 +837,16 @@ export class TorrentPeer extends TorrentDHTNode {
     msg: Extract<TorrentControlMessage, { type: "LRU_STORE" }>,
   ) {
     if (msg.to !== this.identifier) return;
-    const { message: control } = msg;
-    if (this.data_store.has(control.control_id)) return;
-    this.store(control);
+    const lru: TorrentControlMessage[] = TorrentUtils.from_array_buffer(
+      TorrentUtils.from_base64_url(msg.lru),
+    );
+
+    for (const node of lru) {
+      if (!node?.control_id) continue;
+
+      if (this.data_store.has(node.control_id)) continue;
+      this.store(node);
+    }
   }
 
   private _forward_msg_naive(control: TorrentControlMessage) {
@@ -1180,6 +1192,8 @@ export class TorrentPeer extends TorrentDHTNode {
       swarm_key,
       aes_key_obj.aes_key,
     );
+
+    this.emit("eph_exchange_complete", msg.furrow ?? msg.seeder);
 
     // send swarm key
     const eph_offer_msg: Omit<
