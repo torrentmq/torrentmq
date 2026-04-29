@@ -375,29 +375,33 @@ export class TorrentUtils {
   static async decrypt(
     encrypted_data: ArrayBuffer,
     raw_key: ArrayBuffer | CryptoKey,
-  ): Promise<ArrayBuffer> {
-    const data = new Uint8Array(encrypted_data);
-    const iv = data.slice(0, 12); // Extract IV
-    const encrypted = data.slice(12); // Extract encrypted data
+  ): Promise<ArrayBuffer | null> {
+    try {
+      const data = new Uint8Array(encrypted_data);
+      const iv = data.slice(0, 12); // Extract IV
+      const encrypted = data.slice(12); // Extract encrypted data
 
-    const key =
-      raw_key instanceof ArrayBuffer
-        ? await crypto.subtle.importKey(
-            "raw",
-            raw_key,
-            { name: "AES-GCM" },
-            false,
-            ["decrypt"],
-          )
-        : raw_key;
+      const key =
+        raw_key instanceof ArrayBuffer
+          ? await crypto.subtle.importKey(
+              "raw",
+              raw_key,
+              { name: "AES-GCM" },
+              false,
+              ["decrypt"],
+            )
+          : raw_key;
 
-    return crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, encrypted);
+      return crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, encrypted);
+    } catch {
+      return null; // caller must guard
+    }
   }
 
   static generate_salt(length = 32): ArrayBuffer {
     const salt = new Uint8Array(length);
     crypto.getRandomValues(salt);
-    return salt.buffer;
+    return salt.buffer.slice(0);
   }
 
   static async _generate_swarm_key(): Promise<ArrayBuffer> {

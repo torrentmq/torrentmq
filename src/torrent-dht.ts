@@ -266,11 +266,12 @@ export class TorrentDHTNode extends TorrentEmitter<
   }
 
   private _handle_yoyo(msg: Extract<TorrentSignalMessage, { type: "YOYO" }>) {
-    if (this.connected_peers.has(msg.from)) return;
+    const target_id = msg.to ?? msg.from;
+    if (this.connected_peers.has(target_id)) return;
 
     if (this.connected_peers.size < this.max_peer_cluster_size) {
-      const is_polite = this.identifier.localeCompare(msg.to ?? msg.from) < 0;
-      if (is_polite) this._initiate_connection_to_peer(msg.to ?? msg.from);
+      const is_polite = this.identifier.localeCompare(target_id) < 0;
+      if (is_polite) this._initiate_connection_to_peer(target_id);
       else {
         // they might not have discovered this peer so say "YOYO"
         const yoyo_broadcast: TorrentSignalMessage = {
@@ -287,6 +288,12 @@ export class TorrentDHTNode extends TorrentEmitter<
     msg: Extract<TorrentSignalMessage, { type: "OFFER" }>,
   ) {
     if (msg.to !== this.identifier) return;
+    // Reject inbound offers when at capacity (unless we already have an entry for this peer)
+    if (
+      !this.connected_peers.has(msg.from) &&
+      this.connected_peers.size >= this.max_peer_cluster_size
+    )
+      return;
 
     const entry =
       this.connected_peers.get(msg.from) ||

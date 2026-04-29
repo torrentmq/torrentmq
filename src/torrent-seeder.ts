@@ -267,53 +267,61 @@ export class TorrentSeeder extends TorrentEmitter<
   }
 
   private setup_event_listeners() {
-    this.peer.on<{ id: string; name: string }>(
-      "eph_exchange_init",
-      ({ name }) => {
+    this.peer.on({
+      eph_exchange_init: ({ name }: { id: string; name: string }) => {
         if (name === this.name) this.is_exchanging = true;
       },
-    );
-
-    this.peer.on<{ id: string; name: string }>(
-      "eph_exchange_complete",
-      ({ name }) => {
+      eph_exchange_complete: ({ name }: { id: string; name: string }) => {
         if (name === this.name) this.is_exchanging = false;
       },
-    );
+      swarm_key_exchanged: ({
+        seeder,
+      }: {
+        seeder: TorrentHostedObj & { swarm_key: ArrayBuffer };
+        furrow?: TorrentHostedObj & { swarm_key: ArrayBuffer };
+      }) => {
+        if (this.name !== seeder.name) return;
 
-    this.peer.on<{
-      seeder: TorrentHostedObj & { swarm_key: ArrayBuffer };
-      furrow?: TorrentHostedObj & { swarm_key: ArrayBuffer };
-    }>("swarm_key_exchanged", ({ seeder }) => {
-      if (this.name !== seeder.name) return;
+        this.identifier = seeder.id;
+        this.swarm_key = seeder.swarm_key;
 
-      this.identifier = seeder.id;
-      this.swarm_key = seeder.swarm_key;
+        // if we receive a key from another root, we step down
+        if (this.mode === "master") {
+          this.mode = "shadow";
+          this.emit("seeder_demoted", { id: this.identifier, name: this.name });
+          this.start_intervals(); // re-syncs intervals to follower mode
+        }
 
-      // if we receive a key from another root, we step down
-      if (this.mode === "master") {
-        this.mode = "shadow";
-        this.emit("seeder_demoted", { id: this.identifier, name: this.name });
-        this.start_intervals(); // re-syncs intervals to follower mode
-      }
-    });
-
-    // pulse monitoring for failover
-    this.peer.on<{ id: string; name: string }>(
-      "seeder_pulse",
-      ({ id, name }) => {
-        if (name === this.name && !this.is_exchanging) {
-          if (this.identifier.localeCompare(id) < 0)
-            this.peer.find({
-              id: this.identifier,
-              name: this.name,
-            });
-
-          if (this.mode === "master") this.demote_from_root();
-          else this.reset_watchdog();
+        // Re-register all bound furrows under the now-adopted seeder identifier
+        for (const furrow of this.furrows) {
+          if (furrow.is_bound) {
+            furrow.unbind(furrow["routing_key"]);
+            furrow.bind(furrow["routing_key"]);
+          }
         }
       },
-    );
+      seeder_pulse: ({ id, name }: { id: string; name: string }) => {
+        if (name === this.name && !this.is_exchanging) {
+          if (id !== this.identifier) {
+            const is_polite = this.identifier.localeCompare(id) < 0;
+
+            if (is_polite) {
+              // Trigger discovery to get the Master's key/identity
+              this.peer.find({
+                id,
+                name,
+              });
+              this.demote_from_root();
+            } else if (this.mode === "master")
+              // We are the superior master, send a pulse to assert dominance
+              this.peer.send_pulse({ id: this.identifier, name: this.name });
+          } else {
+            if (this.mode === "shadow") this.reset_watchdog();
+            else this.demote_from_root();
+          }
+        }
+      },
+    });
   }
 
   private start_intervals() {

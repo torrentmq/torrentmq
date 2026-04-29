@@ -28,7 +28,7 @@ export class TorrentEphemeral {
   async create_aes_key(
     eph_key: ArrayBuffer,
     salt: BufferSource,
-  ): Promise<{ aes_key: CryptoKey; raw_aes_key: ArrayBuffer }> {
+  ): Promise<CryptoKey> {
     const external_pub_eph_key = await crypto.subtle.importKey(
       "raw",
       eph_key,
@@ -63,15 +63,10 @@ export class TorrentEphemeral {
       },
       session_key,
       { name: "AES-GCM", length: 256 },
-      true,
+      false,
       ["encrypt", "decrypt"],
     );
 
-    const raw_aes_key = await crypto.subtle.exportKey("raw", aes_key);
-
-    return {
-      aes_key,
-      raw_aes_key,
-    };
+    return aes_key;
   }
 }

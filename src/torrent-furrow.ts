@@ -295,64 +295,67 @@ export class TorrentFurrow extends TorrentEmitter<
   }
 
   private setup_event_listeners() {
-    this.seeder.peer.on<{ id: string; name: string }>(
-      "eph_exchange_init",
-      ({ name }) => {
+    this.seeder.peer.on({
+      eph_exchange_init: ({ name }: { id: string; name: string }) => {
         if (name === this.name) this.is_exchanging = true;
       },
-    );
-
-    this.seeder.peer.on<{ id: string; name: string }>(
-      "eph_exchange_complete",
-      ({ name }) => {
+      eph_exchange_complete: ({ name }: { id: string; name: string }) => {
         if (name === this.name) this.is_exchanging = false;
       },
-    );
+      swarm_key_exchanged: ({
+        furrow,
+      }: {
+        seeder: TorrentHostedObj & { swarm_key: ArrayBuffer };
+        furrow?: TorrentHostedObj & { swarm_key: ArrayBuffer };
+      }) => {
+        if (!furrow || this.name !== furrow.name) return;
 
-    this.seeder.peer.on<{
-      seeder: TorrentHostedObj & { swarm_key: ArrayBuffer };
-      furrow?: TorrentHostedObj & { swarm_key: ArrayBuffer };
-    }>("swarm_key_exchanged", ({ furrow }) => {
-      if (!furrow || this.name !== furrow.name) return;
+        if (this.is_bound) this.unbind(this.routing_key);
 
-      if (this.is_bound) this.unbind(this.routing_key);
+        this.identifier = furrow.id;
+        this.swarm_key = furrow.swarm_key;
 
-      this.identifier = furrow.id;
-      this.swarm_key = furrow.swarm_key;
+        // if we receive a key from another root, we step down
+        if (this.mode === "master") {
+          this.mode = "shadow";
+          // force remove from list of hosted furrows
+          this.emit("furrow_demoted", { id: this.identifier, name: this.name });
+          this.start_intervals(); // re-syncs intervals to shadow mode
+        }
 
-      // if we receive a key from another root, we step down
-      if (this.mode === "master") {
-        this.mode = "shadow";
-        // force remove from list of hosted furrows
-        this.emit("furrow_demoted", { id: this.identifier, name: this.name });
-        this.start_intervals(); // re-syncs intervals to shadow mode
-      }
-
-      this.bind(this.routing_key);
-    });
-
-    // pulse monitoring for failover
-    this.seeder.peer.on<{ id: string; name: string }>(
-      "furrow_pulse",
-      ({ id, name }) => {
+        this.bind(this.routing_key);
+      },
+      furrow_pulse: ({ id, name }: { id: string; name: string }) => {
         if (name === this.name && !this.is_exchanging) {
-          if (this.identifier.localeCompare(id) < 0)
-            this.seeder.peer.find(
-              {
-                id: this.seeder.identifier,
-                name: this.seeder.name,
-              },
-              {
-                id: this.identifier,
-                name: this.name,
-              },
-            );
+          if (id !== this.identifier) {
+            const is_polite = this.identifier.localeCompare(id) < 0;
 
-          if (this.mode === "master") this.demote_from_root();
-          else this.reset_watchdog();
+            if (is_polite) {
+              // Trigger discovery to get the Master's key/identity
+              this.seeder.peer.find(
+                {
+                  id: this.seeder.identifier,
+                  name: this.seeder.name,
+                },
+                {
+                  id,
+                  name,
+                },
+              );
+              this.demote_from_root();
+            } else if (this.mode === "master")
+              // We are the superior master, send a pulse to assert dominance
+              this.seeder.peer.send_pulse(
+                { id: this.seeder.identifier, name: this.seeder.name },
+                { id: this.identifier, name: this.name },
+              );
+          } else {
+            if (this.mode === "shadow") this.reset_watchdog();
+            else this.demote_from_root();
+          }
         }
       },
-    );
+    });
   }
 
   private start_intervals() {

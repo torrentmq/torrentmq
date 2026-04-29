@@ -581,26 +581,9 @@ export class TorrentPeer extends TorrentDHTNode {
   }
 
   private _handle_find(msg: Extract<TorrentControlMessage, { type: "FIND" }>) {
-    const { seeder, furrow } = this._search_hosted(msg.seeder, msg?.furrow);
+    const seeder = this.seeders.find((s) => s.name === msg.seeder.name);
 
-    // if there is a match for the seeder (and furrow if specified)
-    // send FOUND back, otherwise NOT_FOUND
-    if (
-      furrow ? seeder && furrow?.mode === "master" : seeder?.mode === "master"
-    ) {
-      const fnd_msg: Omit<
-        Extract<TorrentControlMessage, { type: "FOUND" }>,
-        "artifacts" | "control_id"
-      > = {
-        type: "FOUND",
-        from: this.identifier,
-        to: msg.from,
-        seeder,
-        furrow,
-      };
-
-      this._broadcast_control(fnd_msg);
-    } else {
+    if (!seeder) {
       const not_fnd_msg: Omit<
         Extract<TorrentControlMessage, { type: "NOT_FOUND" }>,
         "artifacts" | "control_id"
@@ -613,7 +596,41 @@ export class TorrentPeer extends TorrentDHTNode {
       };
 
       this._broadcast_control(not_fnd_msg);
+      return;
     }
+
+    const furrow = msg.furrow
+      ? seeder.furrows.find((f) => f.name === msg.furrow?.name)
+      : undefined;
+
+    // if there is a match for the seeder (and furrow if specified)
+    // send FOUND back
+    const fnd_msg: Omit<
+      Extract<TorrentControlMessage, { type: "FOUND" }>,
+      "artifacts" | "control_id"
+    > = {
+      type: "FOUND",
+      from: this.identifier,
+      to: msg.from,
+      seeder: {
+        id: seeder.identifier,
+        name: seeder.name,
+        mode: seeder.get_mode(),
+        pub_key: seeder.pub_key,
+      },
+      ...(furrow
+        ? {
+            furrow: {
+              id: furrow.identifier,
+              name: furrow.name,
+              mode: furrow.get_mode(),
+              pub_key: furrow.pub_key,
+            },
+          }
+        : {}),
+    };
+
+    this._broadcast_control(fnd_msg);
   }
 
   private async _handle_found(
@@ -633,36 +650,30 @@ export class TorrentPeer extends TorrentDHTNode {
   private async _handle_eph_offer(
     msg: Extract<TorrentControlMessage, { type: "EPH_KEY_OFFER" }>,
   ) {
-    const { seeder: found_seeder, furrow: found_furrow } = this._search_hosted(
-      msg.seeder,
-      msg?.furrow,
-    );
+    const seeder = this.seeders.find((s) => s.name === msg.seeder.name);
 
-    const seeder = this.seeders.find((s) => s.identifier === msg.seeder.id);
-    if (!found_seeder || !seeder) return;
-    if (!seeder.identity) return;
-
-    if (!found_furrow) {
+    if (!seeder) return;
+    if (!msg.furrow) {
       this.emit("eph_exchange_init", seeder);
       await this._execute_eph_exchange(
         seeder.identity,
         seeder.get_swarm_key(),
         msg,
       );
+      return;
     }
 
-    // Send ephemeral offer for furrow if applicable
-    if (!found_furrow || !msg.furrow) return;
-    const furrow_msg = msg.furrow;
-    const furrow = seeder.furrows.find((f) => f.identifier === furrow_msg.id);
-    if (furrow) {
-      this.emit("eph_exchange_init", furrow);
-      await this._execute_eph_exchange(
-        furrow.identity,
-        furrow.get_swarm_key(),
-        msg,
-      );
-    }
+    const furrow = msg.furrow
+      ? seeder.furrows.find((f) => f.name === msg.furrow?.name)
+      : undefined;
+    if (!furrow) return;
+
+    this.emit("eph_exchange_init", furrow);
+    await this._execute_eph_exchange(
+      furrow.identity,
+      furrow.get_swarm_key(),
+      msg,
+    );
   }
 
   private async _handle_eph_exchange(
@@ -688,10 +699,15 @@ export class TorrentPeer extends TorrentDHTNode {
         TorrentUtils.from_base64_url(msg.eph_pub_key),
         aes_salt,
       );
-      const swarm_key = await TorrentUtils.decrypt(
-        TorrentUtils.from_base64_url(msg.encrypted.swarm_key),
-        aes_key.aes_key,
+      const encrypted_swarm_key = TorrentUtils.from_base64_url(
+        msg.encrypted.swarm_key,
       );
+      const swarm_key = await TorrentUtils.decrypt(
+        encrypted_swarm_key,
+        aes_key,
+      );
+
+      if (!swarm_key) return;
 
       // we r no longer "master" no don't list as hosted
       this._remove_from_hosted(msg.seeder.name, msg.furrow?.name);
@@ -699,17 +715,13 @@ export class TorrentPeer extends TorrentDHTNode {
       this.emit("eph_exchange_complete", msg.furrow ?? msg.seeder);
       // do something with swarm_key
       this.emit("swarm_key_exchanged", {
+        peer_id: msg.from,
         seeder: {
           ...msg.seeder,
           // dont add swarm_key as it is for the furrow
-          ...(!msg.furrow
-            ? {
-                swarm_key,
-              }
-            : {}),
+          ...(!msg.furrow ? { swarm_key } : {}),
         },
         ...(msg.furrow ? { furrow: { ...msg.furrow, swarm_key } } : {}),
-        peer_id: msg.from,
       });
 
       this.eph_aes_keys.delete(msg.furrow ? msg.furrow.id : msg.seeder.id);
@@ -1145,13 +1157,13 @@ export class TorrentPeer extends TorrentDHTNode {
     const eph_pub_key = await eph_key.export_public();
     const aes_salt = TorrentUtils.generate_salt();
 
-    const aes_key_obj = await eph_key.create_aes_key(
+    const aes_key = await eph_key.create_aes_key(
       TorrentUtils.from_base64_url(msg.eph_pub_key),
       aes_salt,
     );
     const encrypted_swarm_key_array_buffer = await TorrentUtils.encrypt(
       swarm_key,
-      aes_key_obj.aes_key,
+      aes_key,
     );
 
     this.emit("eph_exchange_complete", msg.furrow ?? msg.seeder);
