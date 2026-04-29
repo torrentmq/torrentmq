@@ -216,25 +216,35 @@ export type TorrentControlMessage =
       lru: string;
     };
 
+type TorrentSignalBase = {
+  signal_id: string;
+  from: string;
+  to?: string; // optional by default
+};
+
+export type TorrentSignalVia = "data_channel" | "signaller";
+
 export type TorrentSignalMessage =
-  | { type: "HELO"; from: string }
-  | { type: "HIHI"; from: string; to: string }
-  | { type: "YOYO"; from: string; to?: string } // used instead of HELO and HIHI for partition recovery
-  | { type: "BYE"; from: string; to?: string }
-  | { type: "OFFER"; from: string; to?: string; sdp: RTCSessionDescription }
-  | { type: "ANSWER"; from: string; to: string; sdp: RTCSessionDescription }
-  | { type: "ICE"; from: string; to?: string; candidate: RTCIceCandidateInit }
-  | {
+  | (TorrentSignalBase & { type: "HELO" })
+  | (TorrentSignalBase & { type: "HIHI"; to: string })
+  | (TorrentSignalBase & { type: "YOYO" }) // used instead of HELO and HIHI for partition recovery
+  | (TorrentSignalBase & { type: "BYE" })
+  | (TorrentSignalBase & { type: "OFFER"; sdp: RTCSessionDescription })
+  | (TorrentSignalBase & {
+      type: "ANSWER";
+      to: string;
+      sdp: RTCSessionDescription;
+    })
+  | (TorrentSignalBase & { type: "ICE"; candidate: RTCIceCandidateInit })
+  | (TorrentSignalBase & {
       type: "STATUS";
-      from: string;
-      to?: string;
       stats?: {
         plr?: number;
         rtt?: number;
         accepting_connections?: boolean;
         connected_peers?: string[];
       };
-    };
+    });
 
 export type TorrentSignalEventMessage =
   | { type: "SIGNALLER_CONNECTED"; ident: string; url: string }

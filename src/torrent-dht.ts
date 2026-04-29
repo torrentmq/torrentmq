@@ -8,6 +8,7 @@ import {
   TorrentEventName,
   TorrentPeerEntry,
   TorrentSignalMessage,
+  TorrentSignalVia,
 } from "./torrent-types";
 import { TorrentUtils } from "./torrent-utils";
 
@@ -21,6 +22,8 @@ export class TorrentDHTNode extends TorrentEmitter<
   | "seeder_pulse"
   | "furrow_pulse"
 > {
+  protected signal_store: TorrentLRUCache<string, TorrentSignalMessage> =
+    new TorrentLRUCache<string, TorrentSignalMessage>(64);
   protected data_store: TorrentLRUCache<string, TorrentControlMessage>;
   // map of remote peer id -> TorrentPeerEntry { RTCPeerConnection, RTCDataChannel, TorrentBrokerBindings }
   protected connected_peers: Map<string, TorrentPeerEntry> = new Map();
@@ -81,9 +84,12 @@ export class TorrentDHTNode extends TorrentEmitter<
     }
 
     // route incoming signalling messages into this instance
-    this.signaller.on<TorrentSignalMessage>("message", (m) =>
-      this._handle_signal_message(m),
-    );
+    this.signaller.on<TorrentSignalMessage>("message", (m) => {
+      if (this.signal_store.has(m.signal_id)) return;
+
+      this._handle_signal_message(m, "signaller");
+      this.signal_store.set(m.signal_id, m);
+    });
 
     // connect signaller and announce presence (HELO)
     // send HELO explicitly as a control message broadcast (server should re-broadcast)
@@ -91,10 +97,11 @@ export class TorrentDHTNode extends TorrentEmitter<
     this.signaller.on("open", () => {
       try {
         const hello_broadcast: TorrentSignalMessage = {
+          signal_id: TorrentUtils.random_string(),
           type: "HELO",
           from: this.identifier,
         };
-        this.signaller.send(hello_broadcast);
+        this.send(hello_broadcast);
         this.emit("signaller_connected");
       } catch (e) {
         console.warn("Failed to send HELO via signaller", e);
@@ -104,7 +111,11 @@ export class TorrentDHTNode extends TorrentEmitter<
     setInterval(() => {
       if (this.connected_peers.size < this.min_peer_cluster_size)
         // request YOYO from signaller or reconnect to random known peer
-        this.signaller.send({ type: "YOYO", from: this.identifier });
+        this.send({
+          signal_id: TorrentUtils.random_string(),
+          type: "YOYO",
+          from: this.identifier,
+        });
 
       // only evict when "healing"
       // ik this is optimisation and not "healing" but fuck it
@@ -140,6 +151,7 @@ export class TorrentDHTNode extends TorrentEmitter<
 
       if (this.connected_peers.size > 0) {
         const status_broadcast: TorrentSignalMessage = {
+          signal_id: TorrentUtils.random_string(),
           type: "STATUS",
           from: this.identifier,
           stats: {
@@ -151,7 +163,7 @@ export class TorrentDHTNode extends TorrentEmitter<
           },
         };
 
-        this.signaller.send(status_broadcast);
+        this.send(status_broadcast);
       }
     }, this.status_frequency_check);
   }
@@ -207,20 +219,23 @@ export class TorrentDHTNode extends TorrentEmitter<
     this.emit("peer_disconnected", { peer_id: peer_id });
   }
 
-  private _handle_signal_message(msg: TorrentSignalMessage) {
+  private _handle_signal_message(
+    msg: TorrentSignalMessage,
+    via: TorrentSignalVia,
+  ) {
     // ignore our own messages (except for signaller identify)
     if (msg.from === this.identifier) return;
 
     switch (msg.type) {
       case "HELO":
-        return this._handle_helo(msg);
+        return this._handle_helo(msg, via);
       case "HIHI":
-        return this._handle_hihi(msg);
+        return this._handle_hihi(msg, via);
       case "YOYO":
-        return this._handle_yoyo(msg);
+        return this._handle_yoyo(msg, via);
 
       case "OFFER":
-        return this._handle_offer(msg);
+        return this._handle_offer(msg, via);
       case "ANSWER":
         return this._handle_answer(msg);
       case "ICE":
@@ -233,7 +248,10 @@ export class TorrentDHTNode extends TorrentEmitter<
     }
   }
 
-  private _handle_helo(msg: Extract<TorrentSignalMessage, { type: "HELO" }>) {
+  private _handle_helo(
+    msg: Extract<TorrentSignalMessage, { type: "HELO" }>,
+    via: TorrentSignalVia,
+  ) {
     // HELO auto-discovery: when a peer broadcasts HELO we start initiating a connection to them
     // if we already have a connection to them, ignore
     if (this.connected_peers.has(msg.from)) return;
@@ -243,49 +261,58 @@ export class TorrentDHTNode extends TorrentEmitter<
 
       if (is_polite)
         // create pc + dc and send OFFER (deterministic tie-break inside)
-        this._initiate_connection_to_peer(msg.from);
+        this._initiate_connection_to_peer(msg.from, via);
       else {
         // they might not have discovered this peer so say "HIHI"
         const hihi_broadcast: TorrentSignalMessage = {
+          signal_id: TorrentUtils.random_string(),
           type: "HIHI",
           from: this.identifier,
           to: msg.from,
         };
-        this.signaller.send(hihi_broadcast);
+        this.send(hihi_broadcast, via);
       }
     }
   }
 
-  private _handle_hihi(msg: Extract<TorrentSignalMessage, { type: "HIHI" }>) {
+  private _handle_hihi(
+    msg: Extract<TorrentSignalMessage, { type: "HIHI" }>,
+    via: TorrentSignalVia,
+  ) {
     if (this.connected_peers.has(msg.from)) return;
 
     if (this.connected_peers.size < this.max_peer_cluster_size) {
       const is_polite = this.identifier.localeCompare(msg.from) < 0;
-      if (is_polite) this._initiate_connection_to_peer(msg.from);
+      if (is_polite) this._initiate_connection_to_peer(msg.from, via);
     }
   }
 
-  private _handle_yoyo(msg: Extract<TorrentSignalMessage, { type: "YOYO" }>) {
+  private _handle_yoyo(
+    msg: Extract<TorrentSignalMessage, { type: "YOYO" }>,
+    via: TorrentSignalVia,
+  ) {
     const target_id = msg.to ?? msg.from;
     if (this.connected_peers.has(target_id)) return;
 
     if (this.connected_peers.size < this.max_peer_cluster_size) {
       const is_polite = this.identifier.localeCompare(target_id) < 0;
-      if (is_polite) this._initiate_connection_to_peer(target_id);
+      if (is_polite) this._initiate_connection_to_peer(target_id, via);
       else {
         // they might not have discovered this peer so say "YOYO"
         const yoyo_broadcast: TorrentSignalMessage = {
+          signal_id: TorrentUtils.random_string(),
           type: "YOYO",
           from: this.identifier,
           to: msg.from,
         };
-        this.signaller.send(yoyo_broadcast);
+        this.send(yoyo_broadcast, via);
       }
     }
   }
 
   private async _handle_offer(
     msg: Extract<TorrentSignalMessage, { type: "OFFER" }>,
+    via: TorrentSignalVia,
   ) {
     if (msg.to !== this.identifier) return;
     // Reject inbound offers when at capacity (unless we already have an entry for this peer)
@@ -324,17 +351,14 @@ export class TorrentDHTNode extends TorrentEmitter<
 
       // send answer back
       const resp: TorrentSignalMessage = {
+        signal_id: TorrentUtils.random_string(),
         type: "ANSWER",
         from: this.identifier,
         to: msg.from,
         sdp: pc.localDescription as RTCSessionDescription,
       };
 
-      try {
-        this.signaller.send(resp);
-      } catch (e) {
-        console.warn("failed to send answer via signaller", e);
-      }
+      this.send(resp, via);
     } catch (e) {
       // console.warn("failed to process offer", e);
     }
@@ -406,7 +430,10 @@ export class TorrentDHTNode extends TorrentEmitter<
     this.emit("status_update", msg);
   }
 
-  private async _initiate_connection_to_peer(remote_id: string) {
+  private async _initiate_connection_to_peer(
+    remote_id: string,
+    via: TorrentSignalVia,
+  ) {
     const is_polite = this.identifier.localeCompare(remote_id) < 0;
 
     const entry = this._create_peer_connection(remote_id, is_polite);
@@ -420,6 +447,7 @@ export class TorrentDHTNode extends TorrentEmitter<
       await pc.setLocalDescription();
 
       const msg: TorrentSignalMessage = {
+        signal_id: TorrentUtils.random_string(),
         type: "OFFER",
         from: this.identifier,
         to: remote_id,
@@ -427,7 +455,7 @@ export class TorrentDHTNode extends TorrentEmitter<
       };
 
       try {
-        this.signaller.send(msg);
+        this.send(msg, via);
       } catch (e) {
         console.warn("failed to send offer via signaller", e);
       }
@@ -474,13 +502,14 @@ export class TorrentDHTNode extends TorrentEmitter<
     pc.onicecandidate = (ev) => {
       if (ev.candidate) {
         const cand_msg: TorrentSignalMessage = {
+          signal_id: TorrentUtils.random_string(),
           type: "ICE",
           from: this.identifier,
           to: remote_id,
           candidate: ev.candidate.toJSON(),
         };
         try {
-          this.signaller.send(cand_msg);
+          this.send(cand_msg);
         } catch (e) {
           console.warn("failed to send ice candidate via signaller", e);
         }
@@ -556,10 +585,21 @@ export class TorrentDHTNode extends TorrentEmitter<
       try {
         const parsed =
           typeof ev.data === "string" ? JSON.parse(ev.data) : ev.data;
-        this.emit("control_message", {
-          parsed: parsed as TorrentControlMessage,
-          remote_id,
-        });
+
+        if (TorrentUtils.is_signal_message(parsed)) {
+          if (this.signal_store.has(parsed.signal_id)) return;
+
+          this._broadcast_to_peers(parsed);
+          this._handle_signal_message(
+            parsed as TorrentSignalMessage,
+            "data_channel",
+          );
+          this.signal_store.set(parsed.signal_id, parsed);
+        } else
+          this.emit("control_message", {
+            parsed: parsed as TorrentControlMessage,
+            remote_id,
+          });
       } catch (e) {
         console.warn("invalid control message from dc", ev.data);
       }
@@ -587,6 +627,74 @@ export class TorrentDHTNode extends TorrentEmitter<
         console.warn("failed to add queued ICE candidate", e);
       }
     }
+  }
+
+  private send(msg: TorrentSignalMessage, via: TorrentSignalVia = "signaller") {
+    if (!this._is_cluster_healthy() && via === "data_channel")
+      via = "signaller";
+
+    if (via === "signaller")
+      try {
+        this.signaller.send(msg);
+      } catch (e) {
+        console.warn("failed to send offer via signaller", e);
+      }
+    else {
+      const sent_to_peers = this._broadcast_to_peers(msg);
+      if (!sent_to_peers)
+        try {
+          this.signaller.send(msg);
+        } catch (e) {
+          console.warn("failed to send offer via signaller", e);
+        }
+    }
+
+    this.signal_store.set(msg.signal_id, msg);
+  }
+
+  private _broadcast_to_peers(msg: TorrentSignalMessage) {
+    if (this.signal_store.has(msg.signal_id)) return;
+
+    const active_peers = Array.from(this.connected_peers.entries()).filter(
+      ([, entry]) => entry?.dc && entry.dc.readyState === "open",
+    );
+
+    if (active_peers.length === 0) return false;
+
+    let target: TorrentPeerEntry | undefined;
+    if (msg.to) {
+      const match = active_peers.find(([id]) => msg.to === id);
+      if (match) target = match[1];
+    }
+
+    if (!target)
+      for (const [, peer] of active_peers) {
+        try {
+          peer.dc!.send(JSON.stringify(msg));
+        } catch (e) {
+          console.warn("failed to broadcast signal to peer", e);
+        }
+      }
+    else
+      try {
+        target.dc!.send(JSON.stringify(msg));
+      } catch (e) {
+        console.warn("failed to broadcast signal to peer", e);
+      }
+
+    return true;
+  }
+
+  private _is_cluster_healthy() {
+    let count = 0;
+    for (const entry of this.connected_peers.values()) {
+      if (
+        entry?.dc?.readyState === "open" &&
+        ++count >= this.min_peer_cluster_size
+      )
+        return true;
+    }
+    return false;
   }
 
   // Heuristics

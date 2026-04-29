@@ -13,6 +13,7 @@ import {
   TorrentSerializableHostedKeyOf,
   TorrentSerializableOrDeserializableBindingKey,
   TorrentSerializableOrDeserializableBindingObj,
+  TorrentSignalMessage,
 } from "./torrent-types";
 
 export class TorrentUtils {
@@ -34,6 +35,15 @@ export class TorrentUtils {
     return Array.from(array)
       .map((byte) => charset[byte % charset.length])
       .join("");
+  }
+
+  static is_signal_message(obj: any): obj is TorrentSignalMessage {
+    return (
+      obj &&
+      typeof obj.signal_id === "string" &&
+      typeof obj.from === "string" &&
+      typeof obj.type === "string"
+    );
   }
 
   static is_message_params(arg: unknown): arg is TorrentMessageParams {
