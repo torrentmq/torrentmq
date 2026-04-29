@@ -450,7 +450,7 @@ export class TorrentDHTNode extends TorrentEmitter<
     let dc: RTCDataChannel | undefined;
 
     if (create_dc) {
-      dc = pc.createDataChannel(TorrentUtils.random_string());
+      dc = pc.createDataChannel("torrent-proto-channel");
       this._attach_dc_handlers(dc, remote_id);
     }
 
@@ -460,18 +460,15 @@ export class TorrentDHTNode extends TorrentEmitter<
       this._attach_dc_handlers(channel, remote_id);
 
       // store dc
-      const e = this.connected_peers.get(remote_id);
-      if (e) e.dc = channel;
-      else {
-        // ensure iceQueue and flags exist even if we hadn't created the entry
+      const entry = this.connected_peers.get(remote_id);
+      if (entry) entry.dc = channel;
+      else
         this.connected_peers.set(remote_id, {
           pc,
           dc: channel,
+          ice_queue: [],
+          making_offer: false,
         });
-        const created = this.connected_peers.get(remote_id)!;
-        created.ice_queue = created.ice_queue ?? [];
-        created.making_offer = created.making_offer ?? false;
-      }
     };
 
     pc.onicecandidate = (ev) => {

@@ -39,7 +39,7 @@ export class TorrentFurrow extends TorrentEmitter<
   private watchdog_timer: ReturnType<typeof setTimeout> | null = null;
 
   // random failover window to avoid collision
-  private readonly failover_timeout: number = 2000 + Math.random() * 1000;
+  private readonly failover_timeout: number = 3000 + Math.random() * 1000;
 
   readonly name: string;
   readonly options: TorrentFurrowParams;
