@@ -21,8 +21,8 @@ export class TorrentDHTNode extends TorrentEmitter<
   | "eph_exchange_complete"
   | "pulse"
 > {
-  protected signal_store: TorrentLRUCache<string, TorrentSignalMessage> =
-    new TorrentLRUCache<string, TorrentSignalMessage>(64);
+  private signal_store: TorrentLRUCache<string, TorrentSignalMessage> =
+    new TorrentLRUCache<string, TorrentSignalMessage>(256);
   protected data_store: TorrentLRUCache<string, TorrentControlMessage>;
   // map of remote peer id -> TorrentPeerEntry { RTCPeerConnection, RTCDataChannel, TorrentBrokerBindings }
   protected connected_peers: Map<string, TorrentPeerEntry> = new Map();
@@ -110,11 +110,14 @@ export class TorrentDHTNode extends TorrentEmitter<
     setInterval(() => {
       if (this.connected_peers.size < this.min_peer_cluster_size)
         // request YOYO from signaller or reconnect to random known peer
-        this.send({
-          signal_id: TorrentUtils.random_string(),
-          type: "YOYO",
-          from: this.identifier,
-        });
+        this.send(
+          {
+            signal_id: TorrentUtils.random_string(),
+            type: "YOYO",
+            from: this.identifier,
+          },
+          this._is_cluster_healthy() ? "signaller" : "data_channel",
+        );
 
       // only evict when "healing"
       // ik this is optimisation and not "healing" but fuck it
@@ -518,9 +521,7 @@ export class TorrentDHTNode extends TorrentEmitter<
     pc.onconnectionstatechange = () => {
       // emit disconnected on closed / failed
       const state = pc.connectionState;
-      if (state === "connected") {
-        // nothing: datachannel open will emit PEER_CONNECTED
-      } else if (
+      if (
         state === "disconnected" ||
         state === "failed" ||
         state === "closed"
@@ -588,7 +589,7 @@ export class TorrentDHTNode extends TorrentEmitter<
         if (TorrentUtils.is_signal_message(parsed)) {
           if (this.signal_store.has(parsed.signal_id)) return;
 
-          this._broadcast_to_peers(parsed);
+          if (parsed.to !== this.identifier) this._broadcast_to_peers(parsed);
           this._handle_signal_message(
             parsed as TorrentSignalMessage,
             "data_channel",

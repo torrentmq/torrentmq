@@ -340,7 +340,8 @@ export class TorrentPeer extends TorrentDHTNode {
     ) {
       // always naively forward if not publish type
       // only forward if not seen before or sent by us
-      if (control.type !== "PUBLISH") this._forward_msg_naive(control);
+      if (control.type !== "PUBLISH" && control.to !== this.identifier)
+        this._forward_msg_naive(control);
       this.store(control);
     }
   }
