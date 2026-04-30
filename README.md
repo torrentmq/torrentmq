@@ -587,7 +587,7 @@ Key types exported from `torrent-types.ts`:
 
 ### Peer cluster sizing
 
-Tkkkkkkkkkkkkhe cluster floor (`min_peer_cluster_size`, default 4) and ceiling (`max_peer_cluster_size`, default 8) control how aggressively the node seeks new connections and when it evicts poor-quality peers.
+The cluster floor (`min_peer_cluster_size`, default 4) and ceiling (`max_peer_cluster_size`, default 8) control how aggressively the node seeks new connections and when it evicts poor-quality peers.
 
 ### Key refresh
 
