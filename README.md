@@ -52,9 +52,9 @@ Peers discover each other through a lightweight WebSocket signalling server. Onc
 
 **TorrentPeer** — the network node. Each browser tab is one peer. Peers form a cluster of 4–8 connections, self-heal when peers leave, and forward messages using a weighted k-best forwarding algorithm.
 
-**TorrentSeeder** — analogous to an exchange in AMQP. A seeder has a name, an ECDSA identity, and an AES-GCM swarm key used to encrypt all messages it carries. Multiple peers can host a seeder with the same name; one is elected *master* and the others become *shadows*.
+**TorrentSeeder** — analogous to an exchange in AMQP. A seeder has a name, an ECDSA identity, and an AES-GCM swarm key used to encrypt all messages it carries. Multiple peers can host a seeder with the same name; one is elected _master_ and the others become _shadows_.
 
-**TorrentFurrow** — analogous to a queue. A furrow belongs to a seeder, has its own identity and swarm key, and can be *planted* (subscribed) or *bound* (registered for routing). Like seeders, furrows participate in leader election independently.
+**TorrentFurrow** — analogous to a queue. A furrow belongs to a seeder, has its own identity and swarm key, and can be _planted_ (subscribed) or _bound_ (registered for routing). Like seeders, furrows participate in leader election independently.
 
 **Master / Shadow** — only the master seeder or furrow signs and publishes messages. If the master disappears, a shadow promotes itself after a randomised failover window (default 3–4 seconds) to avoid split-brain.
 
@@ -67,7 +67,7 @@ Peers discover each other through a lightweight WebSocket signalling server. Onc
 ### Install
 
 ```bash
-npm install torrentmq   # package name may vary
+npm install torrentmq
 ```
 
 ### Start a signalling server (Node.js)
@@ -138,14 +138,14 @@ const peer = new TorrentPeer(options?);
 
 **Options**
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `ws_url` | `string` | auto-detected | WebSocket signalling server URL (`ws://` or `wss://`) |
-| `min_peer_cluster_size` | `number` | `4` | Minimum peers before triggering partition heal |
-| `max_peer_cluster_size` | `number` | `8` | Maximum simultaneous peer connections |
-| `status_frequency` | `number` | `60000` | How often (ms) to sample and broadcast connection stats |
-| `partion_heal_interval` | `number` | `60000` | How often (ms) to attempt partition recovery |
-| `lru_size` | `number` | `1024` | Capacity of the message deduplication LRU cache |
+| Option                  | Type     | Default       | Description                                             |
+| ----------------------- | -------- | ------------- | ------------------------------------------------------- |
+| `ws_url`                | `string` | auto-detected | WebSocket signalling server URL (`ws://` or `wss://`)   |
+| `min_peer_cluster_size` | `number` | `4`           | Minimum peers before triggering partition heal          |
+| `max_peer_cluster_size` | `number` | `8`           | Maximum simultaneous peer connections                   |
+| `status_frequency`      | `number` | `60000`       | How often (ms) to sample and broadcast connection stats |
+| `partion_heal_interval` | `number` | `60000`       | How often (ms) to attempt partition recovery            |
+| `lru_size`              | `number` | `1024`        | Capacity of the message deduplication LRU cache         |
 
 **Methods**
 
@@ -204,14 +204,14 @@ Created via `peer.seeder(...)`. Do not call the constructor directly.
 
 **Properties**
 
-| Property | Type | Description |
-|---|---|---|
-| `name` | `string` | Human-readable name |
-| `identifier` | `string` | SHA-256 fingerprint of the ECDSA public key |
-| `pub_key` | `JsonWebKey` | ECDSA public key (JWK format) |
-| `swarm_key` | `ArrayBuffer` | AES-GCM shared key |
-| `furrows` | `TorrentFurrow[]` | Owned furrows |
-| `options` | `TorrentSeederParams` | Creation options |
+| Property     | Type                  | Description                                 |
+| ------------ | --------------------- | ------------------------------------------- |
+| `name`       | `string`              | Human-readable name                         |
+| `identifier` | `string`              | SHA-256 fingerprint of the ECDSA public key |
+| `pub_key`    | `JsonWebKey`          | ECDSA public key (JWK format)               |
+| `swarm_key`  | `ArrayBuffer`         | AES-GCM shared key                          |
+| `furrows`    | `TorrentFurrow[]`     | Owned furrows                               |
+| `options`    | `TorrentSeederParams` | Creation options                            |
 
 **Methods**
 
@@ -241,13 +241,13 @@ seeder.on("created_furrow",  ({ seeder, furrow }) => { ... });
 
 ```typescript
 type TorrentSeederParams = {
-  type?:        "direct" | "topic" | "fanout"; // routing hint (informational)
-  passive?:     boolean;
-  durable?:     boolean;
+  type?: "direct" | "topic" | "fanout"; // routing hint (informational)
+  passive?: boolean;
+  durable?: boolean;
   auto_delete?: boolean;
-  internal?:    boolean;
-  key_refresh?: number;  // swarm key rotation interval in ms (default: 600000)
-  args?:        Record<string, any>;
+  internal?: boolean;
+  key_refresh?: number; // swarm key rotation interval in ms (default: 600000)
+  args?: Record<string, any>;
 };
 ```
 
@@ -259,13 +259,13 @@ Created via `seeder.furrow(...)`. Do not call the constructor directly.
 
 **Properties**
 
-| Property | Type | Description |
-|---|---|---|
-| `name` | `string` | Human-readable name |
-| `identifier` | `string` | SHA-256 fingerprint of the ECDSA public key |
-| `pub_key` | `JsonWebKey` | ECDSA public key (JWK format) |
-| `is_planted` | `boolean \| "unset"` | Whether a consumer callback is active |
-| `is_bound` | `boolean` | Whether the furrow is registered for routing |
+| Property     | Type                 | Description                                  |
+| ------------ | -------------------- | -------------------------------------------- |
+| `name`       | `string`             | Human-readable name                          |
+| `identifier` | `string`             | SHA-256 fingerprint of the ECDSA public key  |
+| `pub_key`    | `JsonWebKey`         | ECDSA public key (JWK format)                |
+| `is_planted` | `boolean \| "unset"` | Whether a consumer callback is active        |
+| `is_bound`   | `boolean`            | Whether the furrow is registered for routing |
 
 **Methods**
 
@@ -299,13 +299,13 @@ furrow.on("furrow_demoted",  ({ id, name }) => { ... });
 
 ```typescript
 type TorrentFurrowParams = {
-  exclusive?:   boolean;
-  auto_bind?:   boolean;
-  auto_plant?:  boolean;
-  passive?:     boolean;
-  durable?:     boolean;
+  exclusive?: boolean;
+  auto_bind?: boolean;
+  auto_plant?: boolean;
+  passive?: boolean;
+  durable?: boolean;
   auto_delete?: boolean;
-  key_refresh?: number;  // ms, default: 600000
+  key_refresh?: number; // ms, default: 600000
 };
 ```
 
@@ -317,19 +317,19 @@ Represents a single message, both before and after encryption. You receive insta
 
 ```typescript
 class TorrentMessage {
-  body: TorrentMessageBody;          // null | string | number | boolean | object | Uint8Array
+  body: TorrentMessageBody; // null | string | number | boolean | object | Uint8Array
   properties: TorrentMessageProperties;
   on_ack?: TorrentAckCallBack;
 }
 
 type TorrentMessageProperties = {
-  message_id?:  string;
+  message_id?: string;
   routing_key?: string;
   re_delivered?: boolean;
-  body_size?:   number;
+  body_size?: number;
   headers?: {
-    hop_count?:    number;
-    retry_count?:  number;
+    hop_count?: number;
+    retry_count?: number;
     content_type?: string;
   };
 };
@@ -340,7 +340,7 @@ type TorrentMessageProperties = {
 ```typescript
 type TorrentMessageParams = {
   routing_key?: string;
-  on_ack?:      (data: any) => void;
+  on_ack?: (data: any) => void;
 };
 ```
 
@@ -560,19 +560,19 @@ throw new TorrentError("something went wrong");
 
 Key types exported from `torrent-types.ts`:
 
-| Type | Description |
-|---|---|
-| `TorrentSeederFurrowMode` | `"master" \| "shadow"` |
-| `TorrentMessageBody` | `Uint8Array \| string \| number \| boolean \| object \| null` |
-| `TorrentMessageProperties` | Message metadata (routing key, headers, ID, etc.) |
-| `TorrentCallBack` | `(message: TorrentMessage) => void` |
-| `TorrentAckCallBack` | `(data: any) => void` |
-| `TorrentHostedObj` | Seeder/furrow descriptor (id, name, pub_key or cert, mode, properties) |
-| `TorrentPeerQuality` | `"EXCELLENT" \| "GOOD" \| "FAIR" \| "POOR" \| "BAD" \| "DEAD"` |
-| `TorrentPeerEntry` | `{ pc, dc?, bb?, ice_queue?, making_offer?, stats? }` |
-| `TorrentSignalMessage` | Union of all WebRTC signalling messages |
-| `TorrentControlMessage` | Union of all data-channel control messages |
-| `TorrentCertificate` | Optional PKI cert for delegated authority |
+| Type                       | Description                                                            |
+| -------------------------- | ---------------------------------------------------------------------- |
+| `TorrentSeederFurrowMode`  | `"master" \| "shadow"`                                                 |
+| `TorrentMessageBody`       | `Uint8Array \| string \| number \| boolean \| object \| null`          |
+| `TorrentMessageProperties` | Message metadata (routing key, headers, ID, etc.)                      |
+| `TorrentCallBack`          | `(message: TorrentMessage) => void`                                    |
+| `TorrentAckCallBack`       | `(data: any) => void`                                                  |
+| `TorrentHostedObj`         | Seeder/furrow descriptor (id, name, pub_key or cert, mode, properties) |
+| `TorrentPeerQuality`       | `"EXCELLENT" \| "GOOD" \| "FAIR" \| "POOR" \| "BAD" \| "DEAD"`         |
+| `TorrentPeerEntry`         | `{ pc, dc?, bb?, ice_queue?, making_offer?, stats? }`                  |
+| `TorrentSignalMessage`     | Union of all WebRTC signalling messages                                |
+| `TorrentControlMessage`    | Union of all data-channel control messages                             |
+| `TorrentCertificate`       | Optional PKI cert for delegated authority                              |
 
 ---
 
@@ -580,10 +580,10 @@ Key types exported from `torrent-types.ts`:
 
 ### Constants (`torrent-consts.ts`)
 
-| Constant | Value | Description |
-|---|---|---|
-| `TORRENT_PORT` | `6767` | Default WebSocket signalling port |
-| `TORRENT_LEASE_DURATION` | `3000` | Master heartbeat lease in ms |
+| Constant                 | Value  | Description                       |
+| ------------------------ | ------ | --------------------------------- |
+| `TORRENT_PORT`           | `6767` | Default WebSocket signalling port |
+| `TORRENT_LEASE_DURATION` | `3000` | Master heartbeat lease in ms      |
 
 ### Peer cluster sizing
 
