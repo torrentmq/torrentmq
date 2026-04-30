@@ -77,6 +77,11 @@ export class TorrentPeer extends TorrentDHTNode {
       if (typeof arg2 === "string") name = arg2;
     }
 
+    if (name) {
+      const found_seeder = this.seeders.find((s) => s.name === name);
+      if (found_seeder) return found_seeder;
+    }
+
     const seeder = await TorrentSeeder.create(this, name, options);
     this.seeders.push(seeder);
 
@@ -244,10 +249,11 @@ export class TorrentPeer extends TorrentDHTNode {
   }
 
   send_pulse(
+    lease_term: number,
     seeder: TorrentControlSeederOrFurrow,
     furrow?: TorrentControlSeederOrFurrow,
   ) {
-    this._send_intermittent("PULSE", seeder, furrow);
+    this._send_intermittent("PULSE", seeder, furrow, { lease_term });
   }
 
   //  NOTE: All control traffic to DCs only. WebSocket signaling is used only for HELO/OFFER/ANSWER/ICE etc.
@@ -761,8 +767,22 @@ export class TorrentPeer extends TorrentDHTNode {
   ) {
     const { seeder, furrow } = msg;
 
-    this.emit("seeder_pulse", { id: seeder.id, name: seeder.name });
-    if (furrow) this.emit("furrow_pulse", { id: furrow.id, name: furrow.name });
+    this.emit("pulse", {
+      seeder: {
+        id: seeder.id,
+        name: seeder.name,
+        ...(!furrow ? { term: msg.lease_term } : {}),
+      },
+      ...(furrow
+        ? {
+            furrow: {
+              id: furrow.id,
+              name: furrow.name,
+              term: msg.lease_term,
+            },
+          }
+        : {}),
+    });
   }
 
   private _handle_lru_store(
@@ -1130,6 +1150,7 @@ export class TorrentPeer extends TorrentDHTNode {
     type: T,
     seeder: TorrentControlSeederOrFurrow | TorrentControlSeeder,
     furrow?: TorrentControlSeederOrFurrow | TorrentControlBindFurrow,
+    others?: object,
   ) {
     const control: Omit<
       Extract<TorrentControlMessage, { type: T }>,
@@ -1139,6 +1160,7 @@ export class TorrentPeer extends TorrentDHTNode {
       from: this.identifier,
       seeder,
       furrow,
+      ...others,
     } as any; // Cast used here because TS is such a whining bitch
 
     this._broadcast_control(control);

@@ -1,3 +1,4 @@
+import { TORRENT_LEASE_DURATION } from "./torrent-consts";
 import { TorrentEmitter } from "./torrent-emitter";
 import { TorrentIdentity } from "./torrent-identity";
 import { TorrentMessage } from "./torrent-message";
@@ -39,7 +40,8 @@ export class TorrentFurrow extends TorrentEmitter<
   private watchdog_timer: ReturnType<typeof setTimeout> | null = null;
 
   // random failover window to avoid collision
-  private readonly failover_timeout: number = 3000 + Math.random() * 1000;
+  private readonly failover_timeout: number =
+    TORRENT_LEASE_DURATION + Math.random() * 1000;
 
   readonly name: string;
   readonly options: TorrentFurrowParams;
@@ -325,34 +327,47 @@ export class TorrentFurrow extends TorrentEmitter<
 
         this.bind(this.routing_key);
       },
-      furrow_pulse: ({ id, name }: { id: string; name: string }) => {
-        if (name === this.name && !this.is_exchanging) {
-          if (id !== this.identifier) {
-            const is_polite = this.identifier.localeCompare(id) < 0;
+      pulse: ({
+        seeder,
+        furrow,
+      }: {
+        seeder: {
+          id: string;
+          name: string;
+          term?: number;
+        };
+        furrow?: {
+          id: string;
+          name: string;
+          term: number;
+        };
+      }) => {
+        if (!furrow) return;
+        const { term, name, id } = seeder;
 
-            if (is_polite) {
-              // Trigger discovery to get the Master's key/identity
-              this.seeder.peer.find(
-                {
-                  id: this.seeder.identifier,
-                  name: this.seeder.name,
-                },
-                {
-                  id,
-                  name,
-                },
-              );
-              this.demote_from_root();
-            } else if (this.mode === "master")
-              // We are the superior master, send a pulse to assert dominance
-              this.seeder.peer.send_pulse(
-                { id: this.seeder.identifier, name: this.seeder.name },
-                { id: this.identifier, name: this.name },
-              );
-          } else {
-            if (this.mode === "shadow") this.reset_watchdog();
-            else this.demote_from_root();
+        if (name !== this.name || this.is_exchanging) return;
+        if (seeder.name !== this.seeder.name) return;
+
+        const now = Date.now();
+        if (id !== this.identifier) {
+          if (term && term > now) {
+            if (this.mode === "master") this.demote_from_root();
+            this.reset_watchdog();
+          } else if (this.identifier.localeCompare(id) < 0) {
+            // if lease expired or missing tie-break
+            this.seeder.peer.find(
+              {
+                id: this.seeder.identifier,
+                name: this.seeder.name,
+              },
+              { id, name },
+            );
+
+            this.demote_from_root();
           }
+        } else {
+          if (this.mode === "shadow") this.reset_watchdog();
+          else this.demote_from_root();
         }
       },
     });
@@ -379,6 +394,7 @@ export class TorrentFurrow extends TorrentEmitter<
 
       this.pulse_interval = setInterval(() => {
         this.seeder.peer.send_pulse(
+          Date.now() + TORRENT_LEASE_DURATION,
           { id: this.seeder.identifier, name: this.seeder.name },
           { id: this.identifier, name: this.name },
         );
@@ -433,6 +449,7 @@ export class TorrentFurrow extends TorrentEmitter<
 
     // use pulse to signal dominance
     this.seeder.peer.send_pulse(
+      Date.now() + TORRENT_LEASE_DURATION,
       { id: this.seeder.identifier, name: this.seeder.name },
       { id: this.identifier, name: this.name },
     );

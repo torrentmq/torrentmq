@@ -19,8 +19,7 @@ export class TorrentDHTNode extends TorrentEmitter<
   | "swarm_key_exchanged"
   | "eph_exchange_init"
   | "eph_exchange_complete"
-  | "seeder_pulse"
-  | "furrow_pulse"
+  | "pulse"
 > {
   protected signal_store: TorrentLRUCache<string, TorrentSignalMessage> =
     new TorrentLRUCache<string, TorrentSignalMessage>(64);

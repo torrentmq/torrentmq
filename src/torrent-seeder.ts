@@ -1,3 +1,4 @@
+import { TORRENT_LEASE_DURATION } from "./torrent-consts";
 import { TorrentEmitter } from "./torrent-emitter";
 import { TorrentFurrow } from "./torrent-furrow";
 import { TorrentIdentity } from "./torrent-identity";
@@ -42,7 +43,8 @@ export class TorrentSeeder extends TorrentEmitter<
   private watchdog_timer: ReturnType<typeof setTimeout> | null = null;
 
   // random failover window to avoid collision
-  private readonly failover_timeout: number = 3000 + Math.random() * 1000;
+  private readonly failover_timeout: number =
+    TORRENT_LEASE_DURATION + Math.random() * 1000;
 
   readonly name: string;
   readonly options: TorrentSeederParams;
@@ -198,6 +200,11 @@ export class TorrentSeeder extends TorrentEmitter<
       if (typeof arg2 === "string") name = arg2;
     }
 
+    if (name) {
+      const found_furrow = this.furrows.find((f) => f.name === name);
+      if (found_furrow) return found_furrow;
+    }
+
     const furrow = await TorrentFurrow.create(this, options, name);
     this.furrows.push(furrow);
 
@@ -300,25 +307,39 @@ export class TorrentSeeder extends TorrentEmitter<
           }
         }
       },
-      seeder_pulse: ({ id, name }: { id: string; name: string }) => {
-        if (name === this.name && !this.is_exchanging) {
-          if (id !== this.identifier) {
-            const is_polite = this.identifier.localeCompare(id) < 0;
+      pulse: ({
+        seeder,
+        furrow,
+      }: {
+        seeder: {
+          id: string;
+          name: string;
+          term?: number;
+        };
+        furrow?: {
+          id: string;
+          name: string;
+          term: number;
+        };
+      }) => {
+        const { term, name, id } = seeder;
 
-            if (is_polite) {
-              // Trigger discovery to get the Master's key/identity
-              this.peer.find({
-                id,
-                name,
-              });
-              this.demote_from_root();
-            } else if (this.mode === "master")
-              // We are the superior master, send a pulse to assert dominance
-              this.peer.send_pulse({ id: this.identifier, name: this.name });
-          } else {
-            if (this.mode === "shadow") this.reset_watchdog();
-            else this.demote_from_root();
+        if (name !== this.name || this.is_exchanging) return;
+        if (!term) return;
+
+        const now = Date.now();
+        if (id !== this.identifier) {
+          if (term && term > now) {
+            if (this.mode === "master") this.demote_from_root();
+            this.reset_watchdog();
+          } else if (this.identifier.localeCompare(id) < 0) {
+            // if lease expired or missing tie-break
+            this.peer.find({ id, name });
+            this.demote_from_root();
           }
+        } else {
+          if (this.mode === "shadow") this.reset_watchdog();
+          else this.demote_from_root();
         }
       },
     });
@@ -341,7 +362,10 @@ export class TorrentSeeder extends TorrentEmitter<
       }, this.options.key_refresh ?? 600000);
 
       this.pulse_interval = setInterval(() => {
-        this.peer.send_pulse({ id: this.identifier, name: this.name });
+        this.peer.send_pulse(Date.now() + TORRENT_LEASE_DURATION, {
+          id: this.identifier,
+          name: this.name,
+        });
       }, 1000);
     } else this.reset_watchdog();
   }
@@ -392,7 +416,10 @@ export class TorrentSeeder extends TorrentEmitter<
     this.start_intervals();
 
     // use pulse to signal dominance
-    this.peer.send_pulse({ id: this.identifier, name: this.name });
+    this.peer.send_pulse(Date.now() + TORRENT_LEASE_DURATION, {
+      id: this.identifier,
+      name: this.name,
+    });
   }
 
   private demote_from_root() {

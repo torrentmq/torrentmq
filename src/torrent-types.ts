@@ -204,7 +204,7 @@ export type TorrentControlMessage =
     })
   // this is part of my latest hallucinations
   // can't wait for this to fail terribly
-  | (TorrentControlPeerInfo & { type: "PULSE" })
+  | (TorrentControlPeerInfo & { type: "PULSE"; lease_term: number })
   // yay synced storage (this does fuck all me finks)
   // im kidding it is actually so useful for de-dups
   // and ignoring any old messages still in a loop
