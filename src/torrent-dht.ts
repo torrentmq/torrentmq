@@ -588,8 +588,13 @@ export class TorrentDHTNode extends TorrentEmitter<
 
         if (TorrentUtils.is_signal_message(parsed)) {
           if (this.signal_store.has(parsed.signal_id)) return;
+          if (
+            (!parsed.to || parsed.to !== this.identifier) &&
+            parsed.from !== this.identifier
+          )
+            this._broadcast_to_peers(parsed);
+          if (parsed.to && parsed.to !== this.identifier) return;
 
-          if (parsed.to !== this.identifier) this._broadcast_to_peers(parsed);
           this._handle_signal_message(
             parsed as TorrentSignalMessage,
             "data_channel",

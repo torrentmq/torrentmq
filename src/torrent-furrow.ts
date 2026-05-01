@@ -33,7 +33,10 @@ export class TorrentFurrow extends TorrentEmitter<
   private mode: TorrentSeederFurrowMode = "master";
 
   identity: TorrentIdentity;
-  protected swarm_key: ArrayBuffer;
+  // Double-Buffered Key
+  // index 0 is priority this is the expected current swarm key
+  // whilst index 1 is the old key which will be removed after a grace period
+  protected swarm_keys: ArrayBuffer[] = [];
 
   private key_refresh_interval: ReturnType<typeof setInterval> | null = null;
   private pulse_interval: ReturnType<typeof setInterval> | null = null;
@@ -74,7 +77,7 @@ export class TorrentFurrow extends TorrentEmitter<
       this.identity = identity;
       this.identifier = identifier;
       this.pub_key = pub_key;
-      this.swarm_key = swarm_key;
+      this.set_swarm_key(swarm_key);
     }
 
     this.setup_event_listeners();
@@ -137,9 +140,10 @@ export class TorrentFurrow extends TorrentEmitter<
 
     const message = new TorrentMessage(body || null, params);
     const message_body = TorrentUtils.to_array_buffer(message.body);
+    const active_swarm_key = this.swarm_keys[0];
 
-    TorrentUtils.encrypt(message_body, this.swarm_key).then((encrypted) => {
-      TorrentUtils.generate_mac(encrypted, this.swarm_key).then((mac) => {
+    TorrentUtils.encrypt(message_body, active_swarm_key).then((encrypted) => {
+      TorrentUtils.generate_mac(encrypted, active_swarm_key).then((mac) => {
         const encrypted_message = new TorrentMessage(
           TorrentUtils.to_base64_url(encrypted),
         );
@@ -208,42 +212,47 @@ export class TorrentFurrow extends TorrentEmitter<
     if (callback)
       this.seeder.peer.on<Extract<TorrentControlMessage, { type: "PUBLISH" }>>(
         "message_receive",
-        (msg) => {
+        async (msg) => {
           if (msg.seeder.id !== this.seeder.identifier) return;
           if (msg.furrow && msg.furrow.id !== this.identifier) return;
 
-          const swarm_key = msg.furrow ? this.swarm_key : this.seeder.swarm_key;
-
-          TorrentIdentity.verify(
+          const valid_sig = await TorrentIdentity.verify(
             TorrentUtils.to_array_buffer(msg.message.body),
             TorrentUtils.from_base64_url(msg.message.artifacts.signature),
             msg.message.artifacts.pub_key,
-          ).then((valid) => {
-            if (!valid) return;
+          );
+          if (!valid_sig) return;
 
-            TorrentUtils.verify_mac(
+          const keys_to_test = msg.furrow
+            ? this.swarm_keys
+            : this.seeder.swarm_keys;
+          let decrypted_msg: ArrayBuffer | undefined;
+
+          for (const key of keys_to_test) {
+            const valid_mac = await TorrentUtils.verify_mac(
               TorrentUtils.from_base64_url(msg.message.body as string),
-              swarm_key,
+              key,
               msg.message.artifacts.mac,
-            ).then((valid) => {
-              if (!valid) return;
+            );
 
-              TorrentUtils.decrypt(
-                TorrentUtils.from_base64_url(msg.message.body as string),
-                swarm_key,
-              ).then((decrypted_msg) => {
-                if (!decrypted_msg) return;
-                const message_body =
-                  TorrentUtils.from_array_buffer(decrypted_msg);
-                const message = new TorrentMessage(
-                  message_body as TorrentMessageBody,
-                  msg.message.properties,
-                );
+            if (valid_mac) {
+              decrypted_msg =
+                (await TorrentUtils.decrypt(
+                  TorrentUtils.from_base64_url(msg.message.body as string),
+                  key,
+                )) ?? undefined;
+              if (decrypted_msg) break; // stop looking.
+            }
+          }
 
-                if (this.is_planted) callback?.(message);
-              });
-            });
-          });
+          if (!decrypted_msg) return;
+          const message_body = TorrentUtils.from_array_buffer(decrypted_msg);
+          const message = new TorrentMessage(
+            message_body as TorrentMessageBody,
+            msg.message.properties,
+          );
+
+          if (this.is_planted) callback?.(message);
         },
       );
   }
@@ -289,7 +298,23 @@ export class TorrentFurrow extends TorrentEmitter<
   }
 
   get_swarm_key() {
-    return this.swarm_key;
+    return this.swarm_keys[0];
+  }
+
+  private set_swarm_key(new_key: ArrayBuffer) {
+    const old_key = this.swarm_keys[0];
+    this.swarm_keys = [new_key, old_key].filter(Boolean) as ArrayBuffer[];
+
+    if (old_key) {
+      const refresh_interval = this.options.key_refresh ?? 600000;
+      const grace_period = refresh_interval * 0.8;
+
+      setTimeout(() => {
+        if (this.swarm_keys[1] === old_key) {
+          this.swarm_keys.splice(1, 1);
+        }
+      }, grace_period);
+    }
   }
 
   get_mode() {
@@ -315,7 +340,7 @@ export class TorrentFurrow extends TorrentEmitter<
         if (this.is_bound) this.unbind(this.routing_key);
 
         this.identifier = furrow.id;
-        this.swarm_key = furrow.swarm_key;
+        this.set_swarm_key(furrow.swarm_key);
 
         // if we receive a key from another root, we step down
         if (this.mode === "master") {
@@ -385,7 +410,9 @@ export class TorrentFurrow extends TorrentEmitter<
         }
 
         if (this.is_exchanging) return;
-        this.swarm_key = await TorrentUtils._generate_swarm_key();
+        const new_swarm_key = await TorrentUtils._generate_swarm_key();
+        this.set_swarm_key(new_swarm_key);
+
         this.seeder.peer.swarm_key_refresh(
           { id: this.seeder.identifier, name: this.seeder.name },
           { id: this.identifier, name: this.name },

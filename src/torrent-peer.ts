@@ -305,41 +305,45 @@ export class TorrentPeer extends TorrentDHTNode {
     if (control.from === this.identifier) return;
     // already processed, skip entirely
     if (this.data_store.has(control.control_id)) return;
-    if (control.to && control.to !== this.identifier) return;
 
-    switch (control.type) {
-      case "BROKER_MANIFEST": {
-        this._handle_broker_manifest(control);
-        break;
-      }
+    // if message has no destination or it is to us process
+    if (!control.to || control.to === this.identifier) {
+      switch (control.type) {
+        case "BROKER_MANIFEST": {
+          this._handle_broker_manifest(control);
+          break;
+        }
 
-      case "LRU_STORE": {
-        this._handle_lru_store(control);
-        break;
-      }
+        case "LRU_STORE": {
+          this._handle_lru_store(control);
+          break;
+        }
 
-      case "PUBLISH":
-      case "SUBMIT":
-      case "ACK":
-      case "FIND":
-      case "FOUND":
-      case "NOT_FOUND":
-      case "EPH_KEY_OFFER":
-      case "EPH_KEY_EXCHANGE":
-      case "SWARM_KEY_REFRESH":
-      case "PULSE": {
-        await this._handle_signed_control_msg(control, remote_id);
-        break;
+        case "PUBLISH":
+        case "SUBMIT":
+        case "ACK":
+        case "FIND":
+        case "FOUND":
+        case "NOT_FOUND":
+        case "EPH_KEY_OFFER":
+        case "EPH_KEY_EXCHANGE":
+        case "SWARM_KEY_REFRESH":
+        case "PULSE": {
+          await this._handle_signed_control_msg(control, remote_id);
+          break;
+        }
       }
     }
 
     // store in the data store so is ignored if re_delivered
+    // only forward if not seen before or sent by us
     if (
       control.type !== "LRU_STORE" &&
-      !this.data_store.has(control.control_id)
+      !this.data_store.has(control.control_id) &&
+      control.from !== this.identifier
     ) {
       // always naively forward if not publish type
-      // only forward if not seen before or sent by us
+      // and is not at destination
       if (control.type !== "PUBLISH" && control.to !== this.identifier)
         this._forward_msg_naive(control);
       this.store(control);
