@@ -344,8 +344,9 @@ export class TorrentPeer extends TorrentDHTNode {
     ) {
       // always naively forward if not publish type
       // and is not at destination
-      if (control.type !== "PUBLISH" && control.to !== this.identifier)
-        this._forward_msg_naive(control);
+      if (control.to !== this.identifier)
+        if (control.type !== "PUBLISH") this._forward_msg_naive(control);
+        else this._forward_msg(control);
       this.store(control);
     }
   }
@@ -469,7 +470,6 @@ export class TorrentPeer extends TorrentDHTNode {
   private _handle_receive(
     msg: Extract<TorrentControlMessage, { type: "PUBLISH" }>,
   ) {
-    this._forward_msg(msg);
     // Local routing: accept message if routing_key matches this.identifier or empty
     const routing_key = msg.message?.properties?.routing_key ?? "";
 
@@ -824,7 +824,6 @@ export class TorrentPeer extends TorrentDHTNode {
     control: Extract<TorrentControlMessage, { type: "PUBLISH" }>,
   ) {
     if (this.data_store.has(control.control_id)) return;
-    this.store(control);
 
     const best_candidates = this._calculate_candidates();
 
