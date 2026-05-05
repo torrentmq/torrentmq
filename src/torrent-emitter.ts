@@ -22,13 +22,11 @@ export class TorrentEmitter<TEvent extends string> {
       return;
     }
 
-    if (!listener) {
+    if (!listener) 
       throw new TorrentError(`Handler must be provided for event: ${event}`);
-    }
 
-    if (!this._events.has(event)) {
+    if (!this._events.has(event)) 
       this._events.set(event, new Set());
-    }
 
     this._events.get(event)!.add(listener);
   }
