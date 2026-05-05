@@ -1,6 +1,6 @@
 {
   "name": "torrentmq",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "WebRTC-based peer-to-peer message broker",
   "types": "./dist/index.d.ts",
   "import": "./dist/index.mjs",

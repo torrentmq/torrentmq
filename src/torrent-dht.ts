@@ -455,12 +455,7 @@ export class TorrentDHTNode extends TorrentEmitter<
         to: remote_id,
         sdp: pc.localDescription as RTCSessionDescription,
       };
-
-      try {
-        this.send(msg, via);
-      } catch (e) {
-        console.warn("failed to send offer via signaller", e);
-      }
+      this.send(msg, via);
     } catch (e) {
       console.warn("failed while creating/sending offer", e);
     } finally {
@@ -510,11 +505,7 @@ export class TorrentDHTNode extends TorrentEmitter<
           to: remote_id,
           candidate: ev.candidate.toJSON(),
         };
-        try {
-          this.send(cand_msg);
-        } catch (e) {
-          console.warn("failed to send ice candidate via signaller", e);
-        }
+        this.send(cand_msg);
       }
     };
 
