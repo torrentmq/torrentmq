@@ -10,88 +10,215 @@ import { TorrentUtils } from "./torrent-utils";
 export class TorrentSignaller extends TorrentEmitter<
   "message" | "error" | "open" | "close"
 > {
+  private transport?: WebTransport;
+  private stream?: WebTransportBidirectionalStream;
   private socket?: WebSocket;
+
+  private is_connected: boolean = false;
+  private type?: "web_socket" | "web_transport";
   private identifier: string = TorrentUtils.random_string();
+
+  private encoder = new TextEncoder();
+  private decoder = new TextDecoder();
 
   constructor() {
     super();
   }
 
-  connect(server_url?: string) {
-    const { is_secure, default_url } = this.default_socket_url();
+  async connect(options: {
+    server_url?: string;
+    type?: "web_socket" | "web_transport";
+  }) {
+    const { server_url, type } = options;
+    const { is_secure, default_socket_url, default_transport_url } =
+      this.default_socket_url();
 
     if (server_url) {
-      if (!/^wss?:\/\//.test(server_url)) {
+      const is_ws = /^wss?:\/\//.test(server_url);
+      const is_http = /^https?:\/\//.test(server_url);
+
+      if (!is_ws && !is_http) {
         throw new TorrentError(
-          `Invalid WebSocket URL protocol. Expected: ws:// or wss://. Received: ${server_url}`,
+          `Invalid URL protocol. Expected: ws://, wss://, http:// or https://. Received: ${server_url}`,
         );
       }
 
-      if (is_secure && !server_url.startsWith("wss://")) {
+      if (
+        is_secure &&
+        (server_url.startsWith("ws://") || server_url.startsWith("http://"))
+      ) {
         throw new TorrentError(
-          `Insecure WebSocket URL detected. This application is running over HTTPS, so a secure WebSocket (wss://) is required. Received: ${server_url}`,
+          `Insecure URL detected. This application is running over HTTPS, so a secure URL is required. Received: ${server_url}`,
         );
       }
     }
 
-    const resolved_url = server_url ?? default_url;
+    const resolved_url =
+      server_url ??
+      (!type || type === "web_transport"
+        ? default_transport_url
+        : default_socket_url);
 
-    if (
-      this.socket &&
-      this.socket.readyState === WebSocket.OPEN &&
-      this.socket.url === resolved_url
-    )
-      return;
+    const temp_type =
+      type ??
+      (resolved_url.startsWith("wss://") || resolved_url.startsWith("ws://")
+        ? "web_socket"
+        : "web_transport");
 
-    if (resolved_url) {
-      this.socket = new WebSocket(resolved_url);
+    if (temp_type !== this.type) {
+      this.close();
+      this.type = temp_type;
+    }
 
-      if (this.socket) {
-        this.socket.onerror = (ev) =>
+    this.is_connected = true;
+
+    if (this.type === "web_transport") {
+      this.transport = new WebTransport(resolved_url);
+
+      this.transport.ready
+        .then(() => {
+          const msg: TorrentSignalEventMessage = {
+            type: "SIGNALLER_CONNECTED",
+            ident: this.identifier,
+            url: resolved_url,
+          };
+          this.emit<TorrentSignalEventMessage>("open", msg);
+        })
+        .catch((e) =>
           this.emit<TorrentError>(
             "error",
-            new TorrentError(`WebSocket error: ${ev}`),
-          );
-        this.socket.onopen = () => {
-          if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-            const msg: TorrentSignalEventMessage = {
-              type: "SIGNALLER_CONNECTED",
-              ident: this.identifier,
-              url: resolved_url,
-            };
+            new TorrentError(`WebTransport ready error: ${e}`),
+          ),
+        );
 
-            this.emit<TorrentSignalEventMessage>("open", msg);
-          }
-        };
-        this.socket.onmessage = (ev) => this._handle_socket_message(ev.data);
-        this.socket.onclose = () => {
-          this.socket = undefined;
+      this.transport.closed
+        .then(() => {
+          this.cleanup_transport_states();
           const msg: TorrentSignalEventMessage = {
             type: "SIGNALLER_DISCONNECTED",
             ident: this.identifier,
             url: resolved_url,
           };
-
           this.emit<TorrentSignalEventMessage>("close", msg);
+        })
+        .catch((e) => {
+          this.cleanup_transport_states();
+          this.emit<TorrentError>(
+            "error",
+            new TorrentError(`WebTransport closed with error: ${e}`),
+          );
+        });
+
+      try {
+        this.stream = await this.transport.createBidirectionalStream();
+        this._listen_to_transport_stream(this.stream.readable);
+      } catch (e) {
+        throw new TorrentError(`Failed to establish WebTransport stream: ${e}`);
+      }
+    } else {
+      this.socket = new WebSocket(resolved_url);
+
+      this.socket.onerror = (ev) =>
+        this.emit<TorrentError>(
+          "error",
+          new TorrentError(`WebSocket error: ${ev}`),
+        );
+
+      this.socket.onopen = () => {
+        if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+          const msg: TorrentSignalEventMessage = {
+            type: "SIGNALLER_CONNECTED",
+            ident: this.identifier,
+            url: resolved_url,
+          };
+          this.emit<TorrentSignalEventMessage>("open", msg);
+        }
+      };
+
+      this.socket.onmessage = (ev) => this._handle_socket_message(ev.data);
+
+      this.socket.onclose = () => {
+        this.socket = undefined;
+        this.is_connected = false;
+        const msg: TorrentSignalEventMessage = {
+          type: "SIGNALLER_DISCONNECTED",
+          ident: this.identifier,
+          url: resolved_url,
         };
+        this.emit<TorrentSignalEventMessage>("close", msg);
+      };
+    }
+  }
+
+  async send(msg: TorrentSignalMessage) {
+    if (!this.is_connected) {
+      throw new TorrentError("TorrentSignaller not connected");
+    }
+
+    if (this.type === "web_socket") {
+      if (!this.socket || this.socket.readyState !== WebSocket.OPEN)
+        throw new TorrentError("WebSocket is not open");
+
+      this.socket.send(JSON.stringify(msg));
+    } else {
+      if (!this.stream)
+        throw new TorrentError("WebTransport stream is not available");
+
+      const writer = this.stream.writable.getWriter();
+      try {
+        await writer.write(
+          this.encoder.encode(
+            TorrentUtils.to_base64_url(TorrentUtils.to_array_buffer(msg)),
+          ),
+        );
+      } finally {
+        writer.releaseLock();
       }
     }
   }
 
-  get_identifier() {
-    return this.identifier;
-  }
-
-  send(msg: TorrentSignalMessage) {
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-      throw new TorrentError("TorrentSignaller not connected");
-    }
-    this.socket.send(JSON.stringify(msg));
-  }
-
   close() {
+    this.is_connected = false;
+
+    this.transport?.close();
+    this.cleanup_transport_states();
+
     this.socket?.close();
     this.socket = undefined;
+  }
+
+  private cleanup_transport_states() {
+    this.stream = undefined;
+    this.transport = undefined;
+  }
+
+  private async _listen_to_transport_stream(readable: ReadableStream) {
+    const reader = readable.getReader();
+    try {
+      while (this.is_connected) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        if (value) {
+          const decodedString = this.decoder.decode(value);
+          const parsed = TorrentUtils.from_array_buffer(
+            TorrentUtils.from_base64_url(decodedString),
+          );
+
+          this.emit<TorrentSignalMessage>(
+            "message",
+            parsed as TorrentSignalMessage,
+          );
+        }
+      }
+    } catch (e) {
+      this.emit<TorrentError>(
+        "error",
+        new TorrentError(`Error reading WebTransport stream: ${e}`),
+      );
+    } finally {
+      reader.releaseLock();
+    }
   }
 
   private _handle_socket_message(raw: any) {
@@ -102,17 +229,20 @@ export class TorrentSignaller extends TorrentEmitter<
         parsed as TorrentSignalMessage,
       );
     } catch (e) {
-      throw new TorrentError(`Invalid signalling message: ${raw}`);
+      this.emit<TorrentError>(
+        "error",
+        new TorrentError(`Invalid signalling message: ${raw}`),
+      );
     }
   }
 
   private default_socket_url() {
-    // NOTE: default port for connection is 6767
     const { host, is_secure } = TorrentUtils.security_and_host();
 
     return {
       is_secure,
-      default_url: `${is_secure ? "wss" : "ws"}://${host}:${TORRENT_PORT}/ws`,
+      default_socket_url: `${is_secure ? "wss" : "ws"}://${host}:${TORRENT_PORT}/ws`,
+      default_transport_url: `${is_secure ? "https" : "http"}://${host}:${TORRENT_PORT}/wt`,
     };
   }
 }
