@@ -61,7 +61,7 @@ export class TorrentDHTNode extends TorrentEmitter<
     );
 
     this.signaller = new TorrentSignaller();
-    this.signaller.connect(options?.ws_url);
+    this.signaller.connect({ server_url: options?.ws_url });
 
     // assign identity for message signing and verification
     TorrentIdentity.create().then((identity) => {
