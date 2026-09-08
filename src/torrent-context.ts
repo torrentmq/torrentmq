@@ -5,9 +5,13 @@ import {
   TorrentPeerEntry,
 } from "./torrent-types";
 import { TorrentLRUCache } from "./torrent-lru";
+import { TorrentIdentity } from "./torrent-identity";
 
 export class TorrentContext {
-  private readonly identifier: string = TorrentUtils.random_string();
+  // this is used to sign every message leaving the peer
+  protected identity!: TorrentIdentity;
+  private identifier!: string;
+
   // map of remote peer id -> TorrentPeerEntry { RTCPeerConnection, RTCDataChannel }
   private connected_peers: Map<string, TorrentPeerEntry> = new Map();
   protected store: TorrentLRUCache<
@@ -20,6 +24,13 @@ export class TorrentContext {
       string,
       TorrentControlMessage | TorrentSignalMessage
     >(size ?? 1024);
+
+    this._initialize();
+  }
+
+  private async _initialize(): Promise<void> {
+    this.identity = await TorrentIdentity.create();
+    this.identifier = await this.identity.get_identifier();
   }
 
   has(identifier: string): boolean {
@@ -127,18 +138,21 @@ export class TorrentContext {
     };
   }
 
-  private _add_message_artifacts(
+  private async _add_message_artifacts(
     control: Omit<TorrentControlMessage, "control_id" | "artifacts">,
-  ): TorrentControlMessage {
+  ): Promise<TorrentControlMessage> {
     // "Wash" the message to remove undefineds and normalize types
     const cleaned_control = JSON.parse(JSON.stringify(control));
+    const msg_bytes = TorrentUtils.to_array_buffer(cleaned_control);
+    const signature = await this.identity.sign(msg_bytes);
+    const pub_key = await this.identity.export_public_key();
 
     return {
       ...cleaned_control,
       control_id: TorrentUtils.random_string(),
       artifacts: {
-        pub_key: TorrentUtils.random_string(),
-        signature: TorrentUtils.random_string(),
+        pub_key,
+        signature,
         timestamp: Date.now(),
       },
     } as TorrentControlMessage;

@@ -121,3 +121,41 @@ export type TorrentControlMessage =
       furrow?: TorrentControlSeederOrFurrow;
     })
   | (TorrentControlPeerInfo & { type: "ACK"; message_id: string });
+
+// Additional types
+
+export type KeyFormat = "raw" | "pkcs8" | "spki" | "jwk";
+
+type PrimitiveNode =
+  | { t: "null" }
+  | { t: "undef" }
+  | { t: "num"; v: number }
+  | { t: "str"; v: string }
+  | { t: "bool"; v: boolean }
+  | { t: "nan" }
+  | { t: "inf" }
+  | { t: "-inf" }
+  | { t: "bigint"; v: string };
+
+type RefNode = { t: "ref"; v: number };
+
+type DateNode = { t: "date"; v: string; id: number };
+type RegexNode = { t: "regex"; v: [string, string]; id: number };
+type MapNode = { t: "map"; v: [Node, Node][]; id: number };
+type SetNode = { t: "set"; v: Node[]; id: number };
+type TypedArrayNode = { t: "typed"; c: string; v: number[]; id: number };
+type ArrayBufferNode = { t: "arraybuffer"; v: number[]; id: number };
+type ArrayNode = { t: "arr"; v: Node[]; id: number };
+type ObjectNode = { t: "obj"; v: Record<string, Node>; id: number };
+
+export type Node =
+  | PrimitiveNode
+  | RefNode
+  | DateNode
+  | RegexNode
+  | MapNode
+  | SetNode
+  | TypedArrayNode
+  | ArrayBufferNode
+  | ArrayNode
+  | ObjectNode;

@@ -12,8 +12,9 @@ import { TorrentSeeder } from "./torrent-seeder";
 import { TorrentContext } from "./torrent-context";
 
 export class TorrentPeer {
-  private signaller: TorrentSignaller;
   private readonly identifier: string = TorrentUtils.random_string();
+
+  private signaller: TorrentSignaller;
   protected connected: boolean = false;
   private readonly options: TorrentPeerOptions;
 
