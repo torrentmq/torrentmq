@@ -6,21 +6,44 @@ import {
   TorrentWebSocketUrl,
   TorrentPeerEntry,
   TorrentControlMessage,
+  TorrentPeerOptions,
 } from "./torrent-types";
+import { TorrentSeeder } from "./torrent-seeder";
+import { TorrentContext } from "./torrent-context";
 
 export class TorrentPeer {
   private signaller: TorrentSignaller;
   private readonly identifier: string = TorrentUtils.random_string();
+  protected connected: boolean = false;
+  private readonly options: TorrentPeerOptions;
 
-  // map of remote peer id -> TorrentPeerEntry { RTCPeerConnection, RTCDataChannel, TorrentBrokerBindings }
-  protected connected_peers: Map<string, TorrentPeerEntry> = new Map();
+  protected ctx: TorrentContext;
+  protected seeders: TorrentSeeder[] = [];
 
-  constructor(options?: { server_url?: TorrentWebSocketUrl }) {
+  constructor({
+    store_size = 1024,
+    min_cluster_size = 4,
+    max_cluster_size = 8,
+    status_frequency = 60000,
+    partion_heal_interval = 60000,
+    server_url,
+  }: TorrentPeerOptions & {
+    server_url?: TorrentWebSocketUrl;
+    store_size?: number;
+  } = {}) {
+    this.options = {
+      min_cluster_size,
+      max_cluster_size,
+      status_frequency,
+      partion_heal_interval,
+    };
+    this.ctx = new TorrentContext(store_size);
     this.signaller = new TorrentSignaller();
 
-    this.signaller.connect(options?.server_url);
+    this.signaller.connect(server_url);
     this.signaller.on({
       open: () => {
+        this.connected = true;
         this.signaller.send({
           message_id: TorrentUtils.random_string(),
           type: "HELO",
@@ -67,7 +90,7 @@ export class TorrentPeer {
   private _handle_helo(msg: Extract<TorrentSignalMessage, { type: "HELO" }>) {
     // HELO auto-discovery: when a peer broadcasts HELO we start initiating a connection to them
     // if we already have a connection to them, ignore
-    if (this.connected_peers.has(msg.from)) return;
+    if (this.ctx.has(msg.from)) return;
 
     // create pc + dc and send OFFER
     this._initiate_connection_to_peer(msg.from);
@@ -81,7 +104,7 @@ export class TorrentPeer {
   }
 
   private _handle_hihi(msg: Extract<TorrentSignalMessage, { type: "HIHI" }>) {
-    if (this.connected_peers.has(msg.from)) return;
+    if (this.ctx.has(msg.from)) return;
     this._initiate_connection_to_peer(msg.from);
   }
 
@@ -123,7 +146,7 @@ export class TorrentPeer {
   private async _handle_answer(
     msg: Extract<TorrentSignalMessage, { type: "ANSWER" }>,
   ) {
-    const entry = this.connected_peers.get(msg.from);
+    const entry = this.ctx.get(msg.from);
     if (!entry) return;
 
     const pc: RTCPeerConnection = entry.pc;
@@ -141,7 +164,7 @@ export class TorrentPeer {
   private async _handle_ice(
     msg: Extract<TorrentSignalMessage, { type: "ICE" }>,
   ) {
-    const entry = this.connected_peers.get(msg.from);
+    const entry = this.ctx.get(msg.from);
     if (!entry) return;
 
     const pc: RTCPeerConnection = entry.pc;
@@ -155,7 +178,7 @@ export class TorrentPeer {
   private _handle_status(
     msg: Extract<TorrentSignalMessage, { type: "STATUS" }>,
   ) {
-    const entry = this.connected_peers.get(msg.from);
+    const entry = this.ctx.get(msg.from);
     if (!entry) return;
     entry.stats = msg.stats;
   }
@@ -190,7 +213,7 @@ export class TorrentPeer {
 
   private _create_peer_connection(peer_id: string, create_dc: boolean = false) {
     // if existing peer connection exists, return it
-    const existing = this.connected_peers.get(peer_id);
+    const existing = this.ctx.get(peer_id);
     if (existing) return existing;
 
     const pc = new RTCPeerConnection();
@@ -207,7 +230,7 @@ export class TorrentPeer {
       // ice_queue: [],
       // making_offer: false,
     };
-    this.connected_peers.set(peer_id, entry);
+    this.ctx.set(peer_id, entry);
     this._attach_pc_handlers(pc, peer_id);
 
     return entry;
@@ -220,7 +243,7 @@ export class TorrentPeer {
       this._attach_dc_handlers(channel, peer_id);
 
       // store dc
-      const entry = this.connected_peers.get(peer_id);
+      const entry = this.ctx.get(peer_id);
       if (entry) entry.dc = channel;
     };
 
@@ -236,14 +259,13 @@ export class TorrentPeer {
     };
 
     pc.onconnectionstatechange = () => {
-      // emit disconnected on closed / failed
       const state = pc.connectionState;
       if (
         state === "disconnected" ||
         state === "failed" ||
         state === "closed"
       ) {
-        this.connected_peers.delete(peer_id);
+        this.ctx.delete(peer_id);
       }
     };
   }
@@ -262,7 +284,7 @@ export class TorrentPeer {
 
     dc.onclose = () => {
       // clean up dead peers
-      this.connected_peers.delete(peer_id);
+      this.ctx.delete(peer_id);
     };
   }
 

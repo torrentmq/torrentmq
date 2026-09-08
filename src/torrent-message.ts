@@ -27,6 +27,7 @@ export class TorrentMessage {
       content_type: typeof body,
       message_id: TorrentUtils.random_string({ max_length: 32 }),
       body_size: TorrentUtils.compute_body_size(body),
+      ttl: params?.ttl,
     };
   }
 }

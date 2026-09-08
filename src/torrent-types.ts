@@ -15,12 +15,25 @@ export type TorrentMessageProperties = {
   content_type?: string;
   message_id?: string;
   body_size?: number;
+  ttl?: number;
 };
 
 export type TorrentMessageParams = {
   source: string;
   routing_key?: string;
+  ttl?: string;
   on_ack?: TorrentAckCallback;
+};
+
+export type TorrentMessageObject = {
+  body: TorrentMessageBody;
+  properties?: TorrentMessageProperties;
+  artifacts: {
+    mac: string; // message authentication code for the message body and properties
+    pub_key: JsonWebKey;
+    timestamp: number;
+    signature: string;
+  };
 };
 
 export type TorrentAckCallback = (data: any) => void;
@@ -54,6 +67,13 @@ export type TorrentSignalMessage =
       };
     });
 
+export type TorrentPeerOptions = {
+  min_cluster_size?: number;
+  max_cluster_size?: number;
+  status_frequency?: number;
+  partion_heal_interval?: number;
+};
+
 export type TorrentPeerQuality =
   "EXCELLENT" | "GOOD" | "FAIR" | "POOR" | "BAD" | "DEAD";
 
@@ -74,4 +94,30 @@ export type TorrentPeerEntry = {
   };
 };
 
-export type TorrentControlMessage = string;
+export type TorrentControlSeederOrFurrow = {
+  id: string;
+  name: string;
+  pub_key: JsonWebKey;
+};
+
+type TorrentControlPeerInfo = {
+  control_id: string;
+  from: string;
+  to?: string;
+  seeder: TorrentControlSeederOrFurrow;
+  furrow?: TorrentControlSeederOrFurrow;
+  artifacts: {
+    pub_key: JsonWebKey;
+    timestamp: number;
+    signature: string;
+  };
+};
+
+export type TorrentControlMessage =
+  | (TorrentControlPeerInfo & {
+      type: "PUBLISH";
+      message: TorrentMessageObject;
+      seeder: TorrentControlSeederOrFurrow;
+      furrow?: TorrentControlSeederOrFurrow;
+    })
+  | (TorrentControlPeerInfo & { type: "ACK"; message_id: string });
