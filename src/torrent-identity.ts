@@ -2,7 +2,7 @@ import { TorrentUtils } from "./torrent-utils";
 import { KeyFormat } from "./torrent-types";
 
 export class TorrentIdentity {
-  readonly public_key: CryptoKey;
+  private readonly public_key: CryptoKey;
   private readonly private_key: CryptoKey;
 
   constructor(public_key: CryptoKey, private_key: CryptoKey) {

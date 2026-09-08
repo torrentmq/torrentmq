@@ -1,4 +1,9 @@
-import { Node, TorrentMessageBody } from "./torrent-types";
+import {
+  Node,
+  TorrentMessageBody,
+  TorrentMessageParams,
+  TorrentPeerQuality,
+} from "./torrent-types";
 import { TorrentError } from "./torrent-error";
 
 export class TorrentUtils {
@@ -26,6 +31,14 @@ export class TorrentUtils {
     return Array.from(array)
       .map((byte) => charset[byte % charset.length])
       .join("");
+  }
+
+  static is_message_params(arg: unknown): arg is TorrentMessageParams {
+    return (
+      arg !== null &&
+      typeof arg === "object" &&
+      ("routing_key" in arg || "on_ack" in arg)
+    );
   }
 
   static buffer_to_base64(buffer: ArrayBuffer): string {
@@ -227,5 +240,100 @@ export class TorrentUtils {
   static security_and_host(): { host: string; secure: boolean } {
     const host = window.location;
     return { host: host.hostname, secure: host.protocol === "https:" };
+  }
+
+  static async generate_swarm_key(): Promise<ArrayBuffer> {
+    const key = await crypto.subtle.generateKey(
+      {
+        name: "AES-GCM",
+        length: 256,
+      },
+      true, // extractable
+      ["encrypt", "decrypt"],
+    );
+
+    const raw = await crypto.subtle.exportKey("raw", key);
+    return raw;
+  }
+
+  // Heuristics
+
+  static async _get_connection_cost(pc: RTCPeerConnection) {
+    const stats = await pc.getStats();
+
+    let rtt = 0;
+    let available_outgoing_bitrate = 0;
+    let jitter = 0;
+    let packet_loss_ratio = 0;
+
+    let packets_sent = 0;
+    let packets_lost = 0;
+
+    stats.forEach((report) => {
+      // ICE candidate pair
+      if (report.type === "candidate-pair" && report.state === "succeeded") {
+        rtt = report.currentRoundTripTime || rtt;
+        available_outgoing_bitrate = report.availableOutgoingBitrate || 0;
+      }
+
+      // Outbound (packets lost)
+      if (report.type === "outbound-rtp") {
+        packets_sent += report.packetsSent || 0;
+        packets_lost += report.packetsLost || 0;
+        jitter = report.jitter || jitter;
+      }
+
+      // Inbound
+      if (report.type === "inbound-rtp") {
+        packets_sent += report.packetsReceived || 0;
+        packets_lost += report.packetsLost || 0;
+        jitter = report.jitter || jitter;
+      }
+    });
+
+    packet_loss_ratio = packets_sent > 0 ? packets_lost / packets_sent : 0;
+
+    const cost =
+      rtt * 1000 +
+      packet_loss_ratio * 5000 +
+      jitter * 1000 +
+      1 / (available_outgoing_bitrate + 1);
+
+    const quality = TorrentUtils.get_peer_quality({
+      plr: packet_loss_ratio,
+      jitter,
+      rtt,
+    });
+
+    return {
+      cost,
+      rtt,
+      plr: packet_loss_ratio,
+      jitter,
+      aob: available_outgoing_bitrate,
+      quality,
+    };
+  }
+
+  // use Exponential Moving Average (EMA) as distance
+  static _ema_distance(prev_distance: number, cost: number, alpha = 0.1) {
+    // honestly no clue what this is
+    // but it is here and and that is what matters
+    return alpha * cost + (1 - alpha) * prev_distance;
+  }
+
+  static get_peer_quality(metrics: {
+    plr: number;
+    rtt: number;
+    jitter: number;
+  }): TorrentPeerQuality {
+    const { plr, rtt, jitter } = metrics;
+
+    if (rtt < 0.08 && plr < 0.01 && jitter < 0.005) return "EXCELLENT";
+    else if (rtt < 0.2 && plr < 0.03 && jitter < 0.015) return "GOOD";
+    else if (rtt < 0.5 && plr < 0.08 && jitter < 0.03) return "FAIR";
+    else if (rtt < 1.5 && plr < 0.2 && jitter < 0.1) return "POOR";
+    else if (rtt >= 1.5 || plr >= 0.2 || jitter >= 0.1) return "BAD";
+    else return "DEAD";
   }
 }

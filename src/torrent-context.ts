@@ -10,11 +10,13 @@ import { TorrentIdentity } from "./torrent-identity";
 export class TorrentContext {
   // this is used to sign every message leaving the peer
   // it acts as the peer's root identity but not identifier
-  // why? no clue
+  // why just the one? no clue just  accept it
   protected identity!: TorrentIdentity;
+  // well that won't do welcome back
+  private _identifier!: string;
 
   // map of remote peer id -> TorrentPeerEntry { RTCPeerConnection, RTCDataChannel }
-  private connected_peers: Map<string, TorrentPeerEntry> = new Map();
+  readonly connected_peers: Map<string, TorrentPeerEntry> = new Map();
   protected store: TorrentLRUCache<
     string,
     TorrentControlMessage | TorrentSignalMessage
@@ -26,11 +28,16 @@ export class TorrentContext {
       TorrentControlMessage | TorrentSignalMessage
     >(size ?? 1024);
 
-    this._initialize();
+    this._initialize().then();
+  }
+
+  get identifier(): string {
+    return this._identifier;
   }
 
   private async _initialize(): Promise<void> {
     this.identity = await TorrentIdentity.create();
+    this._identifier = await this.identity.get_identifier();
   }
 
   has(identifier: string): boolean {

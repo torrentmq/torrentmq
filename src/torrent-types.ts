@@ -21,7 +21,7 @@ export type TorrentMessageProperties = {
 export type TorrentMessageParams = {
   source: string;
   routing_key?: string;
-  ttl?: string;
+  ttl?: number;
   on_ack?: TorrentAckCallback;
 };
 
@@ -30,7 +30,7 @@ export type TorrentMessageObject = {
   properties?: TorrentMessageProperties;
   artifacts: {
     mac: string; // message authentication code for the message body and properties
-    pub_key: JsonWebKey;
+    public_key: JsonWebKey;
     timestamp: number;
     signature: string;
   };
@@ -56,21 +56,12 @@ export type TorrentSignalMessage =
       to: string;
       sdp: RTCSessionDescription;
     })
-  | (TorrentSignalBase & { type: "ICE"; candidate: RTCIceCandidate })
-  | (TorrentSignalBase & {
-      type: "STATUS";
-      stats?: {
-        plr?: number;
-        rtt?: number;
-        accepting_connections?: boolean;
-        connected_peers?: string[];
-      };
-    });
+  | (TorrentSignalBase & { type: "ICE"; candidate: RTCIceCandidate });
 
 export type TorrentPeerOptions = {
   min_cluster_size?: number;
   max_cluster_size?: number;
-  status_frequency?: number;
+  stats_refresh_interval?: number;
   partion_heal_interval?: number;
 };
 
@@ -80,7 +71,6 @@ export type TorrentPeerQuality =
 export type TorrentPeerEntry = {
   pc: RTCPeerConnection;
   dc?: RTCDataChannel;
-  // bb?: TorrentBrokerBindings;
   // ice_queue?: RTCIceCandidateInit[];
   // making_offer?: boolean;
   stats?: {
@@ -97,7 +87,7 @@ export type TorrentPeerEntry = {
 export type TorrentControlSeederOrFurrow = {
   id: string;
   name: string;
-  pub_key: JsonWebKey;
+  public_key: JsonWebKey;
 };
 
 type TorrentControlPeerInfo = {
@@ -107,7 +97,7 @@ type TorrentControlPeerInfo = {
   seeder: TorrentControlSeederOrFurrow;
   furrow?: TorrentControlSeederOrFurrow;
   artifacts: {
-    pub_key: JsonWebKey;
+    public_key: JsonWebKey;
     timestamp: number;
     signature: string;
   };
@@ -121,6 +111,25 @@ export type TorrentControlMessage =
       furrow?: TorrentControlSeederOrFurrow;
     })
   | (TorrentControlPeerInfo & { type: "ACK"; message_id: string });
+
+type SeederFurrowSharedParams = {
+  passive?: boolean;
+  durable?: boolean;
+  auto_delete?: boolean;
+  key_refresh?: number;
+};
+
+export type TorrentSeederParams = SeederFurrowSharedParams & {
+  type?: "direct" | "topic" | "fanout";
+  internal?: boolean;
+  args?: Record<string, any>;
+};
+
+export type TorrentFurrowParams = SeederFurrowSharedParams & {
+  exclusive?: boolean;
+  auto_bind?: boolean;
+  auto_plant?: boolean;
+};
 
 // Additional types
 

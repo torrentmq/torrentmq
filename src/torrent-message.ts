@@ -12,13 +12,13 @@ export class TorrentMessage {
   on_ack?: TorrentAckCallback;
   body: TorrentMessageBody = null;
 
-  constructor(body: TorrentMessageBody, params: TorrentMessageParams) {
+  constructor(body: TorrentMessageBody, params?: TorrentMessageParams) {
     this.body = body;
     this.on_ack = params?.on_ack;
     this.properties = {
       headers: {
         hop_count: 0,
-        source: params.source,
+        source: params?.source,
         schema_version: package_json.version,
         retry_count: 0,
         re_delivered: false,

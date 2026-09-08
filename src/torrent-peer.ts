@@ -7,25 +7,24 @@ import {
   TorrentPeerEntry,
   TorrentControlMessage,
   TorrentPeerOptions,
+  TorrentSeederParams,
 } from "./torrent-types";
 import { TorrentSeeder } from "./torrent-seeder";
 import { TorrentContext } from "./torrent-context";
 
 export class TorrentPeer {
-  private readonly identifier: string = TorrentUtils.random_string();
-
   private signaller: TorrentSignaller;
   protected connected: boolean = false;
   private readonly options: TorrentPeerOptions;
 
   protected ctx: TorrentContext;
-  protected seeders: TorrentSeeder[] = [];
+  protected seeders: Map<string, TorrentSeeder> = new Map();
 
   constructor({
     store_size = 1024,
     min_cluster_size = 4,
     max_cluster_size = 8,
-    status_frequency = 60000,
+    stats_refresh_interval = 60000,
     partion_heal_interval = 60000,
     server_url,
   }: TorrentPeerOptions & {
@@ -35,7 +34,7 @@ export class TorrentPeer {
     this.options = {
       min_cluster_size,
       max_cluster_size,
-      status_frequency,
+      stats_refresh_interval,
       partion_heal_interval,
     };
     this.ctx = new TorrentContext(store_size);
@@ -48,24 +47,44 @@ export class TorrentPeer {
         this.signaller.send({
           message_id: TorrentUtils.random_string(),
           type: "HELO",
-          from: this.identifier,
+          from: this.ctx.identifier,
         });
       },
       close: () => {
         this.signaller.send({
           message_id: TorrentUtils.random_string(),
           type: "BYE",
-          from: this.identifier,
+          from: this.ctx.identifier,
         });
       },
       message: (m: TorrentSignalMessage) => {
         this._handle_signal_message(m);
       },
     });
+
+    setInterval(() => {
+      this.ctx.connected_peers.forEach((p) =>
+        TorrentUtils._get_connection_cost(p.pc).then(
+          (res) =>
+            (p.stats = {
+              cost: res.cost,
+              quality: res.quality,
+              rtt: res.rtt,
+              plr: res.plr,
+              jitter: res.jitter,
+              aob: res.aob,
+              distance: TorrentUtils._ema_distance(
+                p.stats?.distance ?? 0,
+                res.cost,
+              ),
+            }),
+        ),
+      );
+    }, stats_refresh_interval);
   }
 
   private _handle_signal_message(msg: TorrentSignalMessage) {
-    if (msg.from === this.identifier) return;
+    if (msg.from === this.ctx.identifier) return;
 
     switch (msg.type) {
       case "HELO":
@@ -80,8 +99,6 @@ export class TorrentPeer {
       case "ICE":
         return this._handle_ice(msg);
 
-      case "STATUS":
-        return this._handle_status(msg);
       default:
         // ignore unknown or control messages coming over websocket
         return;
@@ -99,7 +116,7 @@ export class TorrentPeer {
     this.signaller.send({
       message_id: TorrentUtils.random_string(),
       type: "HIHI",
-      from: this.identifier,
+      from: this.ctx.identifier,
       to: msg.from,
     });
   }
@@ -112,12 +129,12 @@ export class TorrentPeer {
   private async _handle_offer(
     msg: Extract<TorrentSignalMessage, { type: "OFFER" }>,
   ) {
-    if (msg.to !== this.identifier) return; // reject if offer not to us
+    if (msg.to !== this.ctx.identifier) return; // reject if offer not to us
 
     try {
       const entry = this._create_peer_connection(msg.from);
       const pc: RTCPeerConnection = entry.pc;
-      const is_polite = this.identifier.localeCompare(msg.from) < 0;
+      const is_polite = this.ctx.identifier.localeCompare(msg.from) < 0;
 
       if (pc.signalingState !== "stable") {
         if (!is_polite) return;
@@ -137,7 +154,7 @@ export class TorrentPeer {
       this.signaller.send({
         message_id: TorrentUtils.random_string(),
         type: "ANSWER",
-        from: this.identifier,
+        from: this.ctx.identifier,
         to: msg.from,
         sdp: pc.localDescription as RTCSessionDescription,
       });
@@ -176,17 +193,9 @@ export class TorrentPeer {
     } catch (e) {}
   }
 
-  private _handle_status(
-    msg: Extract<TorrentSignalMessage, { type: "STATUS" }>,
-  ) {
-    const entry = this.ctx.get(msg.from);
-    if (!entry) return;
-    entry.stats = msg.stats;
-  }
-
   private async _initiate_connection_to_peer(peer_id: string) {
     // deterministic tie-break
-    const is_polite = this.identifier.localeCompare(peer_id) < 0;
+    const is_polite = this.ctx.identifier.localeCompare(peer_id) < 0;
 
     const entry = this._create_peer_connection(peer_id, is_polite);
     const pc: RTCPeerConnection = entry.pc;
@@ -201,7 +210,7 @@ export class TorrentPeer {
       this.signaller.send({
         message_id: TorrentUtils.random_string(),
         type: "OFFER",
-        from: this.identifier,
+        from: this.ctx.identifier,
         to: peer_id,
         sdp: pc.localDescription as RTCSessionDescription,
       });
@@ -253,7 +262,7 @@ export class TorrentPeer {
         this.signaller.send({
           message_id: TorrentUtils.random_string(),
           type: "ICE",
-          from: this.identifier,
+          from: this.ctx.identifier,
           to: peer_id,
           candidate: ev.candidate,
         });
@@ -290,4 +299,29 @@ export class TorrentPeer {
   }
 
   private _handle_control_message(msg: TorrentControlMessage) {}
+
+  seeder(
+    arg1?: string | TorrentSeederParams,
+    arg2?: string | TorrentSeederParams,
+  ) {
+    if (!this.connected)
+      throw new TorrentError("You must connect to an RTC client");
+    let name: string | undefined;
+    let options: TorrentSeederParams | undefined;
+
+    for (const arg of [arg1, arg2]) {
+      if (typeof arg === "string") name = arg;
+      else if (arg) options = arg;
+    }
+
+    if (name) {
+      const existing = this.seeders.get(name);
+      if (existing) return existing;
+    }
+
+    const seeder = new TorrentSeeder(this.ctx, name, options);
+    this.seeders.set(seeder.name, seeder);
+
+    return seeder;
+  }
 }
