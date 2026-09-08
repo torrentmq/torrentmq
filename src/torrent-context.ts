@@ -9,8 +9,9 @@ import { TorrentIdentity } from "./torrent-identity";
 
 export class TorrentContext {
   // this is used to sign every message leaving the peer
+  // it acts as the peer's root identity but not identifier
+  // why? no clue
   protected identity!: TorrentIdentity;
-  private identifier!: string;
 
   // map of remote peer id -> TorrentPeerEntry { RTCPeerConnection, RTCDataChannel }
   private connected_peers: Map<string, TorrentPeerEntry> = new Map();
@@ -30,7 +31,6 @@ export class TorrentContext {
 
   private async _initialize(): Promise<void> {
     this.identity = await TorrentIdentity.create();
-    this.identifier = await this.identity.get_identifier();
   }
 
   has(identifier: string): boolean {
@@ -49,8 +49,10 @@ export class TorrentContext {
     this.connected_peers.delete(identifier);
   }
 
-  publish(control: Omit<TorrentControlMessage, "control_id" | "artifacts">) {
-    const control_w_artifacts = this._add_message_artifacts(control);
+  async publish(
+    control: Omit<TorrentControlMessage, "control_id" | "artifacts">,
+  ) {
+    const control_w_artifacts = await this._add_message_artifacts(control);
     if (control_w_artifacts.type === "PUBLISH")
       // use the weighted k-best forwarding alg
       this._forward_msg(control_w_artifacts);
