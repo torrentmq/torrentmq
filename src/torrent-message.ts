@@ -1,32 +1,32 @@
 import { TorrentUtils } from "./torrent-utils";
 import {
-  TorrentAckCallBack,
+  TorrentAckCallback,
   TorrentMessageBody,
   TorrentMessageParams,
   TorrentMessageProperties,
 } from "./torrent-types";
+import package_json from "../package.json" with { type: "json" };
 
 export class TorrentMessage {
   properties: TorrentMessageProperties;
-  on_ack?: TorrentAckCallBack;
+  on_ack?: TorrentAckCallback;
   body: TorrentMessageBody = null;
 
-  constructor(message_body: TorrentMessageBody, params?: TorrentMessageParams) {
-    this.body = message_body;
-
+  constructor(body: TorrentMessageBody, params: TorrentMessageParams) {
+    this.body = body;
     this.on_ack = params?.on_ack;
-
     this.properties = {
-      message_id: TorrentUtils.random_string(),
-      routing_key: params?.routing_key,
-      re_delivered: false,
-      body_size: TorrentUtils.compute_body_size(message_body),
-
       headers: {
         hop_count: 0,
+        source: params.source,
+        schema_version: package_json.version,
         retry_count: 0,
-        content_type: typeof message_body,
+        re_delivered: false,
       },
+      routing_key: params?.routing_key,
+      content_type: typeof body,
+      message_id: TorrentUtils.random_string({ max_length: 32 }),
+      body_size: TorrentUtils.compute_body_size(body),
     };
   }
 }
