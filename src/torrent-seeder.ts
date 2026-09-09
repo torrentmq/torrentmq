@@ -14,8 +14,8 @@ import { TorrentMessage } from "./torrent-message";
 export class TorrentSeeder {
   protected identity!: TorrentIdentity;
   private _identifier!: string;
-  public_key!: JsonWebKey;
-  swarm_key!: ArrayBuffer;
+  private public_key!: JsonWebKey;
+  private swarm_key!: ArrayBuffer;
 
   protected ctx: TorrentContext;
   protected furrows: Map<string, TorrentFurrow> = new Map();
@@ -110,6 +110,38 @@ export class TorrentSeeder {
       Extract<TorrentControlMessage, { type: "PUBLISH" }>,
       "artifacts" | "control_id"
     >);
+  }
+
+  furrow(
+    arg1?: string | TorrentSeederParams,
+    arg2?: string | TorrentSeederParams,
+  ) {
+    // for my latest magic trick
+    let name: string | undefined;
+    let options: TorrentSeederParams | undefined;
+
+    for (const arg of [arg1, arg2]) {
+      if (typeof arg === "string") name = arg;
+      else if (arg) options = arg;
+    }
+
+    if (name) {
+      const existing = this.furrows.get(name);
+      if (existing) return existing;
+    }
+
+    const furrow = new TorrentFurrow(
+      this.ctx,
+      {
+        name: this.name,
+        swarm_key: this.swarm_key,
+      },
+      name,
+      options,
+    );
+    this.furrows.set(furrow.name, furrow);
+
+    return furrow;
   }
 
   private _attach_handlers(): void {

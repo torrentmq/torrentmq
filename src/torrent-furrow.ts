@@ -15,12 +15,11 @@ import { TorrentMessage } from "./torrent-message";
 export class TorrentFurrow {
   protected identity!: TorrentIdentity;
   private _identifier!: string;
-  public_key!: JsonWebKey;
-  swarm_key!: ArrayBuffer;
+  private public_key!: JsonWebKey;
+  private swarm_key!: ArrayBuffer;
 
-  protected ctx: TorrentContext & {
-    seeder: { name: string; swarm_key: ArrayBuffer };
-  };
+  protected ctx: TorrentContext;
+  protected seeder: { name: string; swarm_key: ArrayBuffer };
 
   readonly name: string;
   protected _options: TorrentFurrowParams;
@@ -28,11 +27,13 @@ export class TorrentFurrow {
   private plant_callback?: TorrentCallback;
 
   constructor(
-    ctx: TorrentContext & { seeder: { name: string; swarm_key: ArrayBuffer } },
+    ctx: TorrentContext,
+    seeder: { name: string; swarm_key: ArrayBuffer },
     arg1?: string | TorrentFurrowParams,
     arg2?: string | TorrentFurrowParams,
   ) {
     this.ctx = ctx;
+    this.seeder = seeder;
 
     let name: string = TorrentUtils.random_string();
     let options: TorrentFurrowParams = {
@@ -133,11 +134,15 @@ export class TorrentFurrow {
     arg2?: TorrentCallback | TorrentConsumeParams,
   ) {
     let callback: TorrentCallback | undefined;
-    let params: TorrentConsumeParams | undefined;
+    let params: TorrentConsumeParams = {
+      tag: undefined,
+      exclusive: false,
+      no_ack: true,
+    };
 
     for (const arg of [arg1, arg2]) {
       if (typeof arg === "function") callback = arg;
-      else if (typeof arg === "object") params = arg;
+      else if (typeof arg === "object") params = { ...params, ...arg };
     }
 
     this.plant_callback = callback;
@@ -147,7 +152,7 @@ export class TorrentFurrow {
         async (msg) => {
           if (!TorrentUtils.is_control_message(msg)) return;
           if (msg.type === "PUBLISH") {
-            if (msg.seeder.name !== this.ctx.seeder.name) return;
+            if (msg.seeder.name !== this.seeder.name) return;
             if (msg.furrow && msg.furrow.name !== this.name) return;
 
             const valid_sig = await TorrentUtils.verify_with_key(
@@ -160,7 +165,7 @@ export class TorrentFurrow {
 
             const swarm_key = msg.furrow
               ? this.swarm_key
-              : this.ctx.seeder.swarm_key;
+              : this.seeder.swarm_key;
             let decrypted_msg: ArrayBuffer | undefined;
 
             const valid_mac = await TorrentUtils.verify_mac(
