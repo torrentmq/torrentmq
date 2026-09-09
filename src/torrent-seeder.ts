@@ -4,6 +4,7 @@ import {
   TorrentMessageBody,
   TorrentMessageParams,
   TorrentControlMessage,
+  TorrentSignalMessage,
 } from "./torrent-types";
 import { TorrentIdentity } from "./torrent-identity";
 import { TorrentFurrow } from "./torrent-furrow";
@@ -17,7 +18,7 @@ export class TorrentSeeder {
   swarm_key!: ArrayBuffer;
 
   protected ctx: TorrentContext;
-  furrows: TorrentFurrow[] = [];
+  protected furrows: Map<string, TorrentFurrow> = new Map();
 
   readonly name: string;
   readonly options: TorrentSeederParams;
@@ -29,35 +30,39 @@ export class TorrentSeeder {
   ) {
     this.ctx = ctx;
 
-    let name = TorrentUtils.random_string();
-    let options = {};
+    let name: string = TorrentUtils.random_string();
+    let options: TorrentSeederParams = {
+      passive: false,
+      durable: false,
+      auto_delete: false,
+      // key_refresh: 60000,
+
+      type: "direct",
+      internal: false,
+
+      args: undefined,
+    };
 
     for (const arg of [arg1, arg2]) {
       if (typeof arg === "string") name = arg;
-      else if (arg) options = arg;
+      else if (arg) options = { ...options, ...arg };
     }
 
     this.name = name;
     this.options = options;
 
     this._initialize().then();
+    this._attach_handlers();
   }
 
   get identifier(): string {
     return this._identifier;
   }
 
-  private async _initialize(): Promise<void> {
-    this.identity = await TorrentIdentity.create();
-    this._identifier = await this.identity.get_identifier();
-    this.public_key = (await this.identity.export_public_key()) as JsonWebKey;
-    this.swarm_key = await TorrentUtils.generate_swarm_key();
-  }
-
   async send(
     arg1?: TorrentMessageBody | TorrentMessageParams,
     arg2?: TorrentMessageBody | TorrentMessageParams,
-  ) {
+  ): Promise<void> {
     let body: TorrentMessageBody | null = null;
     let params: TorrentMessageParams | undefined;
 
@@ -105,5 +110,22 @@ export class TorrentSeeder {
       Extract<TorrentControlMessage, { type: "PUBLISH" }>,
       "artifacts" | "control_id"
     >);
+  }
+
+  private _attach_handlers(): void {
+    this.ctx.store.on<TorrentControlMessage | TorrentSignalMessage>(
+      "set",
+      (msg) => {
+        if (!TorrentUtils.is_control_message(msg)) return;
+        // handle relevant messages
+      },
+    );
+  }
+
+  private async _initialize(): Promise<void> {
+    this.identity = await TorrentIdentity.create();
+    this._identifier = await this.identity.get_identifier();
+    this.public_key = (await this.identity.export_public_key()) as JsonWebKey;
+    this.swarm_key = await TorrentUtils.generate_swarm_key();
   }
 }

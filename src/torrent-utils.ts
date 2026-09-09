@@ -3,6 +3,7 @@ import {
   TorrentMessageBody,
   TorrentMessageParams,
   TorrentPeerQuality,
+  TorrentControlMessage,
 } from "./torrent-types";
 import { TorrentError } from "./torrent-error";
 
@@ -38,6 +39,15 @@ export class TorrentUtils {
       arg !== null &&
       typeof arg === "object" &&
       ("routing_key" in arg || "on_ack" in arg)
+    );
+  }
+
+  static is_control_message(obj: any): obj is TorrentControlMessage {
+    return (
+      obj &&
+      typeof obj.control_id === "string" &&
+      typeof obj.from === "string" &&
+      typeof obj.type === "string"
     );
   }
 
@@ -337,7 +347,7 @@ export class TorrentUtils {
     else return "DEAD";
   }
 
-  // Security???
+  // something???
   static async verify_with_key(
     data: ArrayBuffer,
     signature: ArrayBuffer,
@@ -360,5 +370,93 @@ export class TorrentUtils {
       signature,
       data,
     );
+  }
+
+  static async generate_mac(
+    data: ArrayBuffer,
+    raw_key: ArrayBuffer,
+  ): Promise<string> {
+    const key = await crypto.subtle.importKey(
+      "raw",
+      raw_key,
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+
+    const signature = await crypto.subtle.sign("HMAC", key, data);
+    return this.buffer_to_base64(signature);
+  }
+
+  static async verify_mac(
+    data: ArrayBuffer,
+    raw_key: ArrayBuffer,
+    mac: string,
+  ): Promise<boolean> {
+    const key = await crypto.subtle.importKey(
+      "raw",
+      raw_key,
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["verify"],
+    );
+
+    const signature = this.base64_to_buffer(mac);
+    return crypto.subtle.verify("HMAC", key, signature, data);
+  }
+
+  static async encrypt(
+    data: ArrayBuffer,
+    raw_key: ArrayBuffer | CryptoKey,
+  ): Promise<ArrayBuffer> {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key =
+      raw_key instanceof ArrayBuffer
+        ? await crypto.subtle.importKey(
+            "raw",
+            raw_key,
+            { name: "AES-GCM" },
+            false,
+            ["encrypt"],
+          )
+        : raw_key;
+
+    const encrypted = await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv },
+      key,
+      data,
+    );
+
+    // Prepend IV to encrypted data for later decryption
+    const result = new Uint8Array(iv.length + encrypted.byteLength);
+    result.set(iv, 0);
+    result.set(new Uint8Array(encrypted), iv.length);
+    return result.buffer;
+  }
+
+  static async decrypt(
+    encrypted_data: ArrayBuffer,
+    raw_key: ArrayBuffer | CryptoKey,
+  ): Promise<ArrayBuffer | null> {
+    try {
+      const data = new Uint8Array(encrypted_data);
+      const iv = data.slice(0, 12); // Extract IV
+      const encrypted = data.slice(12); // Extract encrypted data
+
+      const key =
+        raw_key instanceof ArrayBuffer
+          ? await crypto.subtle.importKey(
+              "raw",
+              raw_key,
+              { name: "AES-GCM" },
+              false,
+              ["decrypt"],
+            )
+          : raw_key;
+
+      return crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, encrypted);
+    } catch {
+      return null; // caller must guard
+    }
   }
 }

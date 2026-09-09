@@ -46,11 +46,8 @@ export class TorrentContext {
     return this._connected_peers;
   }
 
-  private async _initialize(): Promise<void> {
-    this.identity = await TorrentIdentity.create();
-    this._identifier = await this.identity.get_identifier();
-  }
-
+  // this only publishes over the DataChannel
+  // NEVER even think to try send signal messages using this
   async publish(
     control:
       | TorrentControlMessage
@@ -164,5 +161,10 @@ export class TorrentContext {
         timestamp: Date.now(),
       },
     } as TorrentControlMessage;
+  }
+
+  private async _initialize(): Promise<void> {
+    this.identity = await TorrentIdentity.create();
+    this._identifier = await this.identity.get_identifier();
   }
 }

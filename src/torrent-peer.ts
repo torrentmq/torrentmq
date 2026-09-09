@@ -83,8 +83,34 @@ export class TorrentPeer {
     }, stats_refresh_interval);
   }
 
+  seeder(
+    arg1?: string | TorrentSeederParams,
+    arg2?: string | TorrentSeederParams,
+  ) {
+    if (!this.connected)
+      throw new TorrentError("You must connect to an RTC client");
+    let name: string | undefined;
+    let options: TorrentSeederParams | undefined;
+
+    for (const arg of [arg1, arg2]) {
+      if (typeof arg === "string") name = arg;
+      else if (arg) options = arg;
+    }
+
+    if (name) {
+      const existing = this.seeders.get(name);
+      if (existing) return existing;
+    }
+
+    const seeder = new TorrentSeeder(this.ctx, name, options);
+    this.seeders.set(seeder.name, seeder);
+
+    return seeder;
+  }
+
   private _handle_signal_message(msg: TorrentSignalMessage) {
     if (msg.from === this.ctx.identifier) return;
+    if (this.ctx.store.has(msg.message_id)) return;
 
     switch (msg.type) {
       case "HELO":
@@ -101,6 +127,7 @@ export class TorrentPeer {
 
       default:
         // ignore unknown or control messages coming over websocket
+        this.ctx.store.set(msg.message_id, msg);
         return;
     }
   }
@@ -329,30 +356,5 @@ export class TorrentPeer {
       if (!msg.to || msg.to === this.ctx.identifier)
         this.ctx.store.set(msg.control_id, msg);
     }
-  }
-
-  seeder(
-    arg1?: string | TorrentSeederParams,
-    arg2?: string | TorrentSeederParams,
-  ) {
-    if (!this.connected)
-      throw new TorrentError("You must connect to an RTC client");
-    let name: string | undefined;
-    let options: TorrentSeederParams | undefined;
-
-    for (const arg of [arg1, arg2]) {
-      if (typeof arg === "string") name = arg;
-      else if (arg) options = arg;
-    }
-
-    if (name) {
-      const existing = this.seeders.get(name);
-      if (existing) return existing;
-    }
-
-    const seeder = new TorrentSeeder(this.ctx, name, options);
-    this.seeders.set(seeder.name, seeder);
-
-    return seeder;
   }
 }

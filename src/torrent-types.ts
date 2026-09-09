@@ -1,3 +1,5 @@
+import { TorrentMessage } from "./torrent-message";
+
 export type TorrentMessageBody =
   Uint8Array | string | number | boolean | object | null;
 
@@ -36,6 +38,7 @@ export type TorrentMessageObject = {
   };
 };
 
+export type TorrentCallback = (message: TorrentMessage) => void;
 export type TorrentAckCallback = (data: any) => void;
 
 export type TorrentWebSocketUrl = `${"ws" | "wss"}://${string}`;
@@ -116,19 +119,24 @@ type SeederFurrowSharedParams = {
   passive?: boolean;
   durable?: boolean;
   auto_delete?: boolean;
-  key_refresh?: number;
+  // key_refresh?: number;
+  args?: Record<string, unknown>;
 };
 
 export type TorrentSeederParams = SeederFurrowSharedParams & {
   type?: "direct" | "topic" | "fanout";
   internal?: boolean;
-  args?: Record<string, any>;
 };
 
 export type TorrentFurrowParams = SeederFurrowSharedParams & {
   exclusive?: boolean;
-  auto_bind?: boolean;
-  auto_plant?: boolean;
+  routing_keys?: string[];
+};
+
+export type TorrentConsumeParams = {
+  tag?: string;
+  no_ack?: boolean;
+  exclusive?: boolean;
 };
 
 // Additional types
