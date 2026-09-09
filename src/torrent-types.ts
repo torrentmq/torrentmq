@@ -139,6 +139,10 @@ export type TorrentConsumeParams = {
   exclusive?: boolean;
 };
 
+export type TorrentSubscription = {
+  unplant(): void;
+};
+
 // Additional types
 
 export type KeyFormat = "raw" | "pkcs8" | "spki" | "jwk";
