@@ -5,6 +5,7 @@ import {
   TorrentMessageParams,
   TorrentControlMessage,
   TorrentSignalMessage,
+  TorrentFurrowParams,
 } from "./torrent-types";
 import { TorrentIdentity } from "./torrent-identity";
 import { TorrentFurrow } from "./torrent-furrow";
@@ -113,12 +114,12 @@ export class TorrentSeeder {
   }
 
   furrow(
-    arg1?: string | TorrentSeederParams,
-    arg2?: string | TorrentSeederParams,
+    arg1?: string | TorrentFurrowParams,
+    arg2?: string | TorrentFurrowParams,
   ) {
-    // for my latest magic trick
+    // if u couldn't tell arleady i copy and pasted this
     let name: string | undefined;
-    let options: TorrentSeederParams | undefined;
+    let options: TorrentFurrowParams | undefined;
 
     for (const arg of [arg1, arg2]) {
       if (typeof arg === "string") name = arg;
