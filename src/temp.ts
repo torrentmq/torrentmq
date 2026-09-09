@@ -14,4 +14,3 @@ const subscription = furrow.plant(
     if (message.properties.headers?.source === "3") subscription.unplant();
   },
 );
-subscription.unplant();

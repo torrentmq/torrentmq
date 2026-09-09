@@ -272,55 +272,58 @@ export class TorrentUtils {
     const stats = await pc.getStats();
 
     let rtt = 0;
-    let available_outgoing_bitrate = 0;
+    let aob = 0;
     let jitter = 0;
-    let packet_loss_ratio = 0;
 
-    let packets_sent = 0;
-    let packets_lost = 0;
+    let outbound_sent = 0;
+    let outbound_lost = 0;
+
+    let inbound_received = 0;
+    let inbound_lost = 0;
 
     stats.forEach((report) => {
-      // ICE candidate pair
       if (report.type === "candidate-pair" && report.state === "succeeded") {
-        rtt = report.currentRoundTripTime || rtt;
-        available_outgoing_bitrate = report.availableOutgoingBitrate || 0;
+        rtt = report.currentRoundTripTime ?? rtt;
+        aob = report.availableOutgoingBitrate ?? aob;
       }
 
-      // Outbound (packets lost)
       if (report.type === "outbound-rtp") {
-        packets_sent += report.packetsSent || 0;
-        packets_lost += report.packetsLost || 0;
-        jitter = report.jitter || jitter;
+        outbound_sent += report.packetsSent ?? 0;
+        outbound_lost += report.packetsLost ?? 0;
+        jitter = report.jitter ?? jitter;
       }
 
-      // Inbound
       if (report.type === "inbound-rtp") {
-        packets_sent += report.packetsReceived || 0;
-        packets_lost += report.packetsLost || 0;
-        jitter = report.jitter || jitter;
+        inbound_received += report.packetsReceived ?? 0;
+        inbound_lost += report.packetsLost ?? 0;
+        jitter = report.jitter ?? jitter;
       }
     });
 
-    packet_loss_ratio = packets_sent > 0 ? packets_lost / packets_sent : 0;
+    const outbound_plr =
+      outbound_sent + outbound_lost > 0
+        ? outbound_lost / (outbound_sent + outbound_lost)
+        : 0;
 
-    const cost =
-      rtt * 1000 +
-      packet_loss_ratio * 5000 +
-      jitter * 1000 +
-      1 / (available_outgoing_bitrate + 1);
+    const inbound_plr =
+      inbound_received + inbound_lost > 0
+        ? inbound_lost / (inbound_received + inbound_lost)
+        : 0;
 
+    const plr = Math.max(outbound_plr, inbound_plr);
+    const cost = rtt * 1000 + plr * 5000 + jitter * 1000 + 1 / (aob + 1);
     const quality = TorrentUtils.get_peer_quality({
-      plr: packet_loss_ratio,
-      jitter,
+      plr,
       rtt,
+      jitter,
     });
 
     return {
       cost,
       rtt,
-      plr: packet_loss_ratio,
+      plr,
       jitter,
-      aob: available_outgoing_bitrate,
+      aob,
       quality,
     };
   }
