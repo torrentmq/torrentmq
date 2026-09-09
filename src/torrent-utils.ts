@@ -336,4 +336,29 @@ export class TorrentUtils {
     else if (rtt >= 1.5 || plr >= 0.2 || jitter >= 0.1) return "BAD";
     else return "DEAD";
   }
+
+  // Security???
+  static async verify_with_key(
+    data: ArrayBuffer,
+    signature: ArrayBuffer,
+    public_key: CryptoKey | JsonWebKey,
+  ): Promise<boolean> {
+    const key =
+      public_key instanceof CryptoKey
+        ? public_key
+        : await crypto.subtle.importKey(
+            "jwk",
+            public_key,
+            { name: "ECDSA", namedCurve: "P-256" },
+            true,
+            ["verify"],
+          );
+
+    return crypto.subtle.verify(
+      { name: "ECDSA", hash: "SHA-256" },
+      key,
+      signature,
+      data,
+    );
+  }
 }

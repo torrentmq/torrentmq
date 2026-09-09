@@ -16,14 +16,14 @@ export class TorrentContext {
   private _identifier!: string;
 
   // map of remote peer id -> TorrentPeerEntry { RTCPeerConnection, RTCDataChannel }
-  readonly connected_peers: Map<string, TorrentPeerEntry> = new Map();
-  protected store: TorrentLRUCache<
+  private readonly _connected_peers: Map<string, TorrentPeerEntry> = new Map();
+  private readonly _store: TorrentLRUCache<
     string,
     TorrentControlMessage | TorrentSignalMessage
   >;
 
   constructor(size?: number) {
-    this.store = new TorrentLRUCache<
+    this._store = new TorrentLRUCache<
       string,
       TorrentControlMessage | TorrentSignalMessage
     >(size ?? 1024);
@@ -35,66 +35,65 @@ export class TorrentContext {
     return this._identifier;
   }
 
+  get store(): TorrentLRUCache<
+    string,
+    TorrentControlMessage | TorrentSignalMessage
+  > {
+    return this._store;
+  }
+
+  get connected_peers(): Map<string, TorrentPeerEntry> {
+    return this._connected_peers;
+  }
+
   private async _initialize(): Promise<void> {
     this.identity = await TorrentIdentity.create();
     this._identifier = await this.identity.get_identifier();
   }
 
-  has(identifier: string): boolean {
-    return this.connected_peers.has(identifier);
-  }
-
-  get(identifier: string): TorrentPeerEntry | undefined {
-    return this.connected_peers.get(identifier);
-  }
-
-  set(identifier: string, entry: TorrentPeerEntry): void {
-    this.connected_peers.set(identifier, entry);
-  }
-
-  delete(identifier: string): void {
-    this.connected_peers.delete(identifier);
-  }
-
   async publish(
-    control: Omit<TorrentControlMessage, "control_id" | "artifacts">,
+    control:
+      | TorrentControlMessage
+      | Omit<TorrentControlMessage, "control_id" | "artifacts">,
   ) {
-    const control_w_artifacts = await this._add_message_artifacts(control);
-    if (control_w_artifacts.type === "PUBLISH")
-      // use the weighted k-best forwarding alg
-      this._forward_msg(control_w_artifacts);
-    else
-      // otherwise broadcast to all connected peers over DCs only
-      for (const [, entry] of this.connected_peers) {
-        if (entry.dc && entry.dc.readyState === "open") {
-          try {
-            entry.dc.send(JSON.stringify(control_w_artifacts));
-          } catch (e) {}
-        }
-      }
+    const control_w_artifacts =
+      "control_id" in control && "artifacts" in control
+        ? control
+        : await this._add_message_artifacts(control);
 
-    if (!this.store.has(control_w_artifacts.control_id))
-      this.store.set(control_w_artifacts.control_id, control_w_artifacts);
+    // don't forward if in store
+    // it means been received before ie forwarded
+    // or it was set by us
+    if (this.store.has(control_w_artifacts.control_id)) return;
+    this._forward_msg(control_w_artifacts);
+    this._store.set(control_w_artifacts.control_id, control_w_artifacts);
   }
 
-  private _forward_msg(
-    control: Extract<TorrentControlMessage, { type: "PUBLISH" }>,
-  ) {
-    if (this.store.has(control.control_id)) return;
-    for (const { peer_id } of this._calculate_best_candidates()) {
-      const entry = this.connected_peers.get(peer_id);
-      if (!entry?.dc) continue;
-      if (entry.dc && entry.dc.readyState === "open")
-        try {
-          entry.dc.send(JSON.stringify(this._increment_hop_count(control)));
-        } catch (e) {}
-    }
+  private _forward_msg(control: TorrentControlMessage) {
+    if (control.type === "PUBLISH")
+      // use the weighted k-best forwarding alg
+      for (const { peer_id } of this._calculate_best_candidates()) {
+        const entry = this._connected_peers.get(peer_id);
+        if (!entry?.dc) continue;
+        if (entry.dc && entry.dc.readyState === "open")
+          try {
+            entry.dc.send(JSON.stringify(this._increment_hop_count(control)));
+          } catch (e) {}
+      }
+    else
+      // otherwise broadcast to all connected peers over DCs naively
+      for (const [, entry] of this._connected_peers) {
+        if (entry.dc && entry.dc.readyState === "open")
+          try {
+            entry.dc.send(JSON.stringify(control));
+          } catch (e) {}
+      }
   }
 
   private _calculate_best_candidates() {
     // NOTE: stop assaulting this fucking code pls
     // I DON'T THINK SO BUDDY
-    const active_peers = Array.from(this.connected_peers.entries()).filter(
+    const active_peers = Array.from(this._connected_peers.entries()).filter(
       ([, entry]) => entry?.dc && entry.dc.readyState === "open",
     );
     const candidates: Array<{ peer_id: string; ema: number }> =

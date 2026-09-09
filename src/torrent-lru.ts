@@ -1,3 +1,5 @@
+import { TorrentEmitter } from "./torrent-emitter";
+
 class TorrentLRUNode<K, V> {
   key: K;
   value: V;
@@ -17,7 +19,7 @@ class TorrentLRUNode<K, V> {
   }
 }
 
-export class TorrentLRUCache<K, V> {
+export class TorrentLRUCache<K, V> extends TorrentEmitter<"set"> {
   private capacity = 512;
   private map: Map<K, TorrentLRUNode<K, V>> = new Map();
   private head: TorrentLRUNode<K, V> | null = null;
@@ -25,6 +27,7 @@ export class TorrentLRUCache<K, V> {
   private size = 0;
 
   constructor(capacity?: number) {
+    super();
     if (capacity) this.capacity = capacity;
   }
 
@@ -50,6 +53,7 @@ export class TorrentLRUCache<K, V> {
       node.value = value;
       this.remove(node);
       this.insert_at_head(node);
+      this.emit<TorrentLRUNode<K, V>>("set", node);
       return;
     }
 
@@ -57,6 +61,7 @@ export class TorrentLRUCache<K, V> {
     node = new TorrentLRUNode(key, value);
     this.map.set(key, node);
     this.insert_at_head(node);
+    this.emit<TorrentLRUNode<K, V>>("set", node);
 
     // evict LRU
     if (this.map.size > this.capacity && this.tail) {

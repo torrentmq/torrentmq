@@ -108,7 +108,7 @@ export class TorrentPeer {
   private _handle_helo(msg: Extract<TorrentSignalMessage, { type: "HELO" }>) {
     // HELO auto-discovery: when a peer broadcasts HELO we start initiating a connection to them
     // if we already have a connection to them, ignore
-    if (this.ctx.has(msg.from)) return;
+    if (this.ctx.connected_peers.has(msg.from)) return;
 
     // create pc + dc and send OFFER
     this._initiate_connection_to_peer(msg.from);
@@ -122,7 +122,7 @@ export class TorrentPeer {
   }
 
   private _handle_hihi(msg: Extract<TorrentSignalMessage, { type: "HIHI" }>) {
-    if (this.ctx.has(msg.from)) return;
+    if (this.ctx.connected_peers.has(msg.from)) return;
     this._initiate_connection_to_peer(msg.from);
   }
 
@@ -164,7 +164,7 @@ export class TorrentPeer {
   private async _handle_answer(
     msg: Extract<TorrentSignalMessage, { type: "ANSWER" }>,
   ) {
-    const entry = this.ctx.get(msg.from);
+    const entry = this.ctx.connected_peers.get(msg.from);
     if (!entry) return;
 
     const pc: RTCPeerConnection = entry.pc;
@@ -182,7 +182,7 @@ export class TorrentPeer {
   private async _handle_ice(
     msg: Extract<TorrentSignalMessage, { type: "ICE" }>,
   ) {
-    const entry = this.ctx.get(msg.from);
+    const entry = this.ctx.connected_peers.get(msg.from);
     if (!entry) return;
 
     const pc: RTCPeerConnection = entry.pc;
@@ -223,7 +223,7 @@ export class TorrentPeer {
 
   private _create_peer_connection(peer_id: string, create_dc: boolean = false) {
     // if existing peer connection exists, return it
-    const existing = this.ctx.get(peer_id);
+    const existing = this.ctx.connected_peers.get(peer_id);
     if (existing) return existing;
 
     const pc = new RTCPeerConnection();
@@ -240,7 +240,7 @@ export class TorrentPeer {
       // ice_queue: [],
       // making_offer: false,
     };
-    this.ctx.set(peer_id, entry);
+    this.ctx.connected_peers.set(peer_id, entry);
     this._attach_pc_handlers(pc, peer_id);
 
     return entry;
@@ -253,7 +253,7 @@ export class TorrentPeer {
       this._attach_dc_handlers(channel, peer_id);
 
       // store dc
-      const entry = this.ctx.get(peer_id);
+      const entry = this.ctx.connected_peers.get(peer_id);
       if (entry) entry.dc = channel;
     };
 
@@ -275,7 +275,7 @@ export class TorrentPeer {
         state === "failed" ||
         state === "closed"
       ) {
-        this.ctx.delete(peer_id);
+        this.ctx.connected_peers.delete(peer_id);
       }
     };
   }
@@ -294,11 +294,42 @@ export class TorrentPeer {
 
     dc.onclose = () => {
       // clean up dead peers
-      this.ctx.delete(peer_id);
+      this.ctx.connected_peers.delete(peer_id);
     };
   }
 
-  private _handle_control_message(msg: TorrentControlMessage) {}
+  private async _handle_control_message(msg: TorrentControlMessage) {
+    // NOTE: de-dup bullshit
+    // ignore if message from self
+    if (msg.from === this.ctx.identifier) return;
+    // already processed, skip entirely
+    if (this.ctx.store.has(msg.control_id)) return;
+
+    const { control_id, artifacts, ...msg_body } = msg;
+    const msg_bytes = TorrentUtils.to_array_buffer(msg_body);
+    const valid = await TorrentUtils.verify_with_key(
+      msg_bytes,
+      TorrentUtils.base64_to_buffer(artifacts.signature),
+      artifacts.public_key,
+    );
+
+    if (!valid)
+      throw new TorrentError(
+        "Malformed message received. The message may be corrupted or incorrectly formatted.",
+      );
+
+    // store in the data store so is ignored if re_delivered
+    // only forward if not seen before or sent by us
+    if (msg.from !== this.ctx.identifier) {
+      // always forward if we are not the recepient
+      if (msg.to !== this.ctx.identifier) this.ctx.publish(msg);
+      // if message has no destination or it is to us store it
+      // objects with access to the context can attach to the store
+      // and handle messages themselves
+      if (!msg.to || msg.to === this.ctx.identifier)
+        this.ctx.store.set(msg.control_id, msg);
+    }
+  }
 
   seeder(
     arg1?: string | TorrentSeederParams,
