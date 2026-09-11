@@ -1,4 +1,4 @@
-import {
+import type {
   Node,
   TorrentMessageBody,
   TorrentMessageParams,
@@ -375,6 +375,12 @@ export class TorrentUtils {
     );
   }
 
+  static generate_salt(length = 32): ArrayBuffer {
+    const salt = new Uint8Array(length);
+    crypto.getRandomValues(salt);
+    return salt.buffer.slice(0);
+  }
+
   static async generate_mac(
     data: ArrayBuffer,
     raw_key: ArrayBuffer,
@@ -461,5 +467,51 @@ export class TorrentUtils {
     } catch {
       return null; // caller must guard
     }
+  }
+
+  static async create_aes_key(
+    local_eph_private_key: CryptoKey,
+    remote_eph_public_key: ArrayBuffer,
+    salt: BufferSource,
+  ): Promise<CryptoKey> {
+    const external_pub_eph_key = await crypto.subtle.importKey(
+      "raw",
+      remote_eph_public_key,
+      { name: "ECDH", namedCurve: "P-256" },
+      true,
+      [],
+    );
+
+    const shared_bits = await crypto.subtle.deriveBits(
+      {
+        name: "ECDH",
+        public: external_pub_eph_key,
+      },
+      local_eph_private_key,
+      256,
+    );
+
+    const session_key = await crypto.subtle.importKey(
+      "raw",
+      shared_bits,
+      { name: "HKDF" },
+      false,
+      ["deriveKey"],
+    );
+
+    const aes_key = await crypto.subtle.deriveKey(
+      {
+        name: "HKDF",
+        hash: "SHA-256",
+        salt,
+        info: new TextEncoder().encode("torrent-session"),
+      },
+      session_key,
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["encrypt", "decrypt"],
+    );
+
+    return aes_key;
   }
 }

@@ -2,7 +2,10 @@ import { TorrentUtils } from "./torrent-utils";
 import { TORRENT_PORT } from "./torrent-consts";
 import { TorrentError } from "./torrent-error";
 import { TorrentEmitter } from "./torrent-emitter";
-import { TorrentWebSocketUrl, TorrentSignalMessage } from "./torrent-types";
+import type {
+  TorrentWebSocketUrl,
+  TorrentSignalMessage,
+} from "./torrent-types";
 
 export class TorrentSignaller extends TorrentEmitter<
   "message" | "error" | "open" | "close"

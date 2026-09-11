@@ -90,7 +90,8 @@ export type TorrentPeerEntry = {
 export type TorrentControlSeederOrFurrow = {
   id: string;
   name: string;
-  public_key: JsonWebKey;
+  // don't need to send this as a pub key is in the artificts
+  // public_key: JsonWebKey;
 };
 
 type TorrentControlPeerInfo = {
@@ -110,16 +111,43 @@ export type TorrentControlMessage =
   | (TorrentControlPeerInfo & {
       type: "PUBLISH";
       message: TorrentMessageObject;
-      seeder: TorrentControlSeederOrFurrow;
-      furrow?: TorrentControlSeederOrFurrow;
     })
-  | (TorrentControlPeerInfo & { type: "ACK"; message_id: string });
+  | (TorrentControlPeerInfo & { type: "ACK"; message_id: string })
+  // key shit for exchange (seeder <-> peer)
+  // it'll be a miracle if this works
+  // 24th April 2026 : it did fucking work, lol
+  | (TorrentControlPeerInfo & { type: "SWARM_KEY_REFRESH" })
+  | (TorrentControlPeerInfo & {
+      type: "EPH_KEY_OFFER";
+      eph_public_key: string;
+    })
+  | (TorrentControlPeerInfo & {
+      type: "EPH_KEY_EXCHANGE";
+      eph_public_key: string; // ur own ephemeral public key
+      key_sig: {
+        eph_public_key: string; // the ephemeral public key you signed
+        signature: string;
+        identity_public_key: JsonWebKey;
+      };
+      encrypted: {
+        aes_salt: string;
+        swarm_key: string;
+      };
+    })
+  // this is part of my latest hallucinations
+  // can't wait for this to fail terribly
+  | (TorrentControlPeerInfo & {
+      type: "PULSE";
+      term: number;
+      created_at: number;
+      options: unknown;
+    });
 
 type SeederFurrowSharedParams = {
   passive?: boolean;
   durable?: boolean;
   auto_delete?: boolean;
-  // key_refresh?: number;
+  key_refresh?: number;
   args?: Record<string, unknown>;
 };
 
@@ -139,13 +167,19 @@ export type TorrentConsumeParams = {
   exclusive?: boolean;
 };
 
+export type TorrentSeederFurrowMode = "ROOT" | "SHADOW";
+
 export type TorrentSubscription = {
   unplant(): void;
 };
 
 // Additional types
 
-export type KeyFormat = "raw" | "pkcs8" | "spki" | "jwk";
+export type KeyFormat = "raw" | "pkcs8" | "spki" | "jwk" | "crypto";
+
+export type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
+  ? Omit<T, K>
+  : never;
 
 type PrimitiveNode =
   | { t: "null" }

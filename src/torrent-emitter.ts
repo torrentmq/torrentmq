@@ -7,7 +7,6 @@ export class TorrentEmitter<TEvent extends string> {
 
   // on<T>(event: TEvent, listener: (data: T) => void): void;
   // on(event: Partial<Record<TEvent, (data: any) => void>>): void;
-
   on<T>(
     event: TEvent | Partial<Record<TEvent, (data: T) => void>>,
     listener?: (data: T) => void,

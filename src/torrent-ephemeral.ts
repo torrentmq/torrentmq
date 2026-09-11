@@ -1,7 +1,6 @@
-import { TorrentUtils } from "./torrent-utils";
 import type { KeyFormat } from "./torrent-types";
 
-export class TorrentIdentity {
+export class TorrentEphemeral {
   private readonly public_key: CryptoKey;
   private readonly private_key: CryptoKey;
 
@@ -10,23 +9,14 @@ export class TorrentIdentity {
     this.private_key = private_key;
   }
 
-  static async create(): Promise<TorrentIdentity> {
+  static async create(): Promise<TorrentEphemeral> {
     const key_pair = await crypto.subtle.generateKey(
-      {
-        name: "ECDSA",
-        namedCurve: "P-256",
-      },
+      { name: "ECDH", namedCurve: "P-256" },
       true,
-      ["sign", "verify"],
+      ["deriveBits"],
     );
 
-    return new TorrentIdentity(key_pair.publicKey, key_pair.privateKey);
-  }
-
-  async get_identifier(): Promise<string> {
-    const publicBytes = await crypto.subtle.exportKey("raw", this.public_key);
-    const hash = await crypto.subtle.digest("SHA-256", publicBytes);
-    return TorrentUtils.buffer_to_base64(hash);
+    return new TorrentEphemeral(key_pair.publicKey, key_pair.privateKey);
   }
 
   async export_public_key(
@@ -41,13 +31,5 @@ export class TorrentIdentity {
   ): Promise<ArrayBuffer | JsonWebKey | CryptoKey> {
     if (format === "crypto") return this.private_key;
     return crypto.subtle.exportKey(format, this.private_key);
-  }
-
-  async sign(data: ArrayBuffer): Promise<ArrayBuffer> {
-    return crypto.subtle.sign(
-      { name: "ECDSA", hash: "SHA-256" },
-      this.private_key,
-      data,
-    );
   }
 }

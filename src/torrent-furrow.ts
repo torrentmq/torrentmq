@@ -1,5 +1,5 @@
 import { TorrentUtils } from "./torrent-utils";
-import {
+import type {
   TorrentMessageBody,
   TorrentMessageParams,
   TorrentControlMessage,
@@ -20,7 +20,11 @@ export class TorrentFurrow {
   private swarm_key!: ArrayBuffer;
 
   protected ctx: TorrentContext;
-  protected seeder: { name: string; swarm_key: ArrayBuffer };
+  protected seeder: {
+    name: string;
+    public_key: JsonWebKey;
+    swarm_key: ArrayBuffer;
+  };
 
   readonly name: string;
   protected _options: TorrentFurrowParams;
@@ -29,7 +33,7 @@ export class TorrentFurrow {
 
   constructor(
     ctx: TorrentContext,
-    seeder: { name: string; swarm_key: ArrayBuffer },
+    seeder: { name: string; public_key: JsonWebKey; swarm_key: ArrayBuffer },
     arg1?: string | TorrentFurrowParams,
     arg2?: string | TorrentFurrowParams,
   ) {
@@ -98,11 +102,13 @@ export class TorrentFurrow {
     const signature = await this.identity.sign(encrypted_message_body);
     this.ctx.publish({
       type: "PUBLISH",
-      from: this.ctx.identifier,
       seeder: {
         id: this.identifier,
         name: this.name,
-        public_key: this.public_key,
+      },
+      furrow: {
+        id: this.identifier,
+        name: this.name,
       },
       message: {
         body: encrypted_message.body,
@@ -114,10 +120,7 @@ export class TorrentFurrow {
           signature: TorrentUtils.buffer_to_base64(signature),
         },
       },
-    } as Omit<
-      Extract<TorrentControlMessage, { type: "PUBLISH" }>,
-      "artifacts" | "control_id"
-    >);
+    });
   }
 
   bind(routing_key: string): void {
@@ -176,42 +179,48 @@ export class TorrentFurrow {
       "set",
       async (msg) => {
         if (!TorrentUtils.is_control_message(msg)) return;
-        if (msg.type === "PUBLISH") {
-          if (msg.seeder.name !== this.seeder.name) return;
-          if (msg.furrow && msg.furrow.name !== this.name) return;
+        switch (msg.type) {
+          case "PUBLISH": {
+            if (msg.seeder.name !== this.seeder.name) return;
+            if (msg.furrow && msg.furrow.name !== this.name) return;
 
-          const valid_sig = await TorrentUtils.verify_with_key(
-            TorrentUtils.to_array_buffer(msg.message.body),
-            TorrentUtils.base64_to_buffer(msg.message.artifacts.signature),
-            msg.message.artifacts.public_key,
-          );
+            const valid_sig = await TorrentUtils.verify_with_key(
+              TorrentUtils.to_array_buffer(msg.message.body),
+              TorrentUtils.base64_to_buffer(msg.message.artifacts.signature),
+              msg.message.artifacts.public_key,
+            );
 
-          if (!valid_sig) return;
+            if (!valid_sig) return;
 
-          const swarm_key = msg.furrow ? this.swarm_key : this.seeder.swarm_key;
-          let decrypted_msg: ArrayBuffer | undefined;
+            const swarm_key = msg.furrow
+              ? this.swarm_key
+              : this.seeder.swarm_key;
+            let decrypted_msg: ArrayBuffer | undefined;
 
-          const valid_mac = await TorrentUtils.verify_mac(
-            TorrentUtils.base64_to_buffer(msg.message.body as string),
-            swarm_key,
-            msg.message.artifacts.mac,
-          );
+            const valid_mac = await TorrentUtils.verify_mac(
+              TorrentUtils.base64_to_buffer(msg.message.body as string),
+              swarm_key,
+              msg.message.artifacts.mac,
+            );
 
-          if (valid_mac) {
-            decrypted_msg =
-              (await TorrentUtils.decrypt(
-                TorrentUtils.base64_to_buffer(msg.message.body as string),
-                swarm_key,
-              )) ?? undefined;
-          }
+            if (valid_mac) {
+              decrypted_msg =
+                (await TorrentUtils.decrypt(
+                  TorrentUtils.base64_to_buffer(msg.message.body as string),
+                  swarm_key,
+                )) ?? undefined;
+            }
 
-          if (!decrypted_msg) return;
-          const message_body = TorrentUtils.from_array_buffer(decrypted_msg);
-          const message = new TorrentMessage(
-            message_body as TorrentMessageBody,
-          );
-          for (const callback of this.plant_callbacks) {
-            callback(message);
+            if (!decrypted_msg) return;
+            const message_body = TorrentUtils.from_array_buffer(decrypted_msg);
+            const message = new TorrentMessage(
+              message_body as TorrentMessageBody,
+            );
+            for (const callback of this.plant_callbacks) {
+              callback(message);
+            }
+
+            break;
           }
         }
       },

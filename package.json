@@ -6,13 +6,13 @@
   "import": "./dist/index.mjs",
   "require": "./dist/index.js",
   "scripts": {
-    "build": "tsup",
+    "build": "tsdown",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "Adrian Tobi",
   "license": "ISC",
-  "type": "commonjs",
+  "type": "module",
   "bugs": {
     "url": "https://github.com/torrentmq/torrentmq/issues"
   },
@@ -22,7 +22,7 @@
     "url": "git+https://github.com/torrentmq/torrentmq.git"
   },
   "devDependencies": {
-    "tsup": "^8.5.1",
+    "tsdown": "^0.23.0",
     "typescript": "^7.0.2"
   }
 }

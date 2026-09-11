@@ -1,5 +1,5 @@
 import { TorrentUtils } from "./torrent-utils";
-import {
+import type {
   TorrentAckCallback,
   TorrentMessageBody,
   TorrentMessageParams,

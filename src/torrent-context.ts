@@ -1,8 +1,9 @@
 import { TorrentUtils } from "./torrent-utils";
-import {
+import type {
   TorrentControlMessage,
   TorrentSignalMessage,
   TorrentPeerEntry,
+  DistributiveOmit,
 } from "./torrent-types";
 import { TorrentLRUCache } from "./torrent-lru";
 import { TorrentIdentity } from "./torrent-identity";
@@ -14,6 +15,7 @@ export class TorrentContext {
   protected identity!: TorrentIdentity;
   // well that won't do welcome back
   private _identifier!: string;
+  private public_key!: JsonWebKey;
 
   // map of remote peer id -> TorrentPeerEntry { RTCPeerConnection, RTCDataChannel }
   private readonly _connected_peers: Map<string, TorrentPeerEntry> = new Map();
@@ -51,10 +53,10 @@ export class TorrentContext {
   async publish(
     control:
       | TorrentControlMessage
-      | Omit<TorrentControlMessage, "control_id" | "artifacts">,
+      | Omit<TorrentControlMessage, "control_id" | "artifacts" | "from">,
   ) {
     const control_w_artifacts =
-      "control_id" in control && "artifacts" in control
+      "control_id" in control && "artifacts" in control && "from" in control
         ? control
         : await this._add_message_artifacts(control);
 
@@ -144,27 +146,30 @@ export class TorrentContext {
   }
 
   private async _add_message_artifacts(
-    control: Omit<TorrentControlMessage, "control_id" | "artifacts">,
+    control: Omit<TorrentControlMessage, "control_id" | "artifacts" | "from">,
   ): Promise<TorrentControlMessage> {
     // "Wash" the message to remove undefineds and normalize types
-    const cleaned_control = JSON.parse(JSON.stringify(control));
+    const cleaned_control: DistributiveOmit<
+      TorrentControlMessage,
+      "control_id" | "artifacts"
+    > = JSON.parse(JSON.stringify({ ...control, from: this.identifier }));
     const msg_bytes = TorrentUtils.to_array_buffer(cleaned_control);
     const signature = await this.identity.sign(msg_bytes);
-    const pub_key = await this.identity.export_public_key();
 
     return {
       ...cleaned_control,
       control_id: TorrentUtils.random_string(),
       artifacts: {
-        pub_key,
-        signature,
+        public_key: this.public_key,
+        signature: TorrentUtils.buffer_to_base64(signature),
         timestamp: Date.now(),
       },
-    } as TorrentControlMessage;
+    };
   }
 
   private async _initialize(): Promise<void> {
     this.identity = await TorrentIdentity.create();
     this._identifier = await this.identity.get_identifier();
+    this.public_key = (await this.identity.export_public_key()) as JsonWebKey;
   }
 }

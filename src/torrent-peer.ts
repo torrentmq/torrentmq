@@ -1,7 +1,7 @@
 import { TorrentUtils } from "./torrent-utils";
 import { TorrentSignaller } from "./torrent-signaller";
 import { TorrentError } from "./torrent-error";
-import {
+import type {
   TorrentSignalMessage,
   TorrentWebSocketUrl,
   TorrentPeerEntry,
@@ -332,7 +332,20 @@ export class TorrentPeer {
     // already processed, skip entirely
     if (this.ctx.store.has(msg.control_id)) return;
 
-    const { control_id, artifacts, ...msg_body } = msg;
+    const temp_msg = msg;
+    // reset hop count for message verification
+    if (temp_msg.type === "PUBLISH")
+      temp_msg.message = {
+        ...temp_msg.message,
+        properties: {
+          ...temp_msg.message.properties,
+          headers: {
+            ...temp_msg.message?.properties?.headers,
+            hop_count: 0,
+          },
+        },
+      };
+    const { control_id, artifacts, ...msg_body } = temp_msg;
     const msg_bytes = TorrentUtils.to_array_buffer(msg_body);
     const valid = await TorrentUtils.verify_with_key(
       msg_bytes,
