@@ -1,14 +1,14 @@
-import { TorrentUtils } from "./torrent-utils";
+import { TorrentUtils } from "../torrent-utils";
 import type {
   TorrentControlMessage,
   TorrentSignalMessage,
   TorrentPeerEntry,
   DistributiveOmit,
-} from "./torrent-types";
-import { TorrentLRUCache } from "./torrent-lru";
-import { TorrentIdentity } from "./torrent-identity";
+} from "../torrent-types";
+import { TorrentLRUCache } from "../torrent-lru";
+import { TorrentIdentity } from "../torrent-identity";
 
-export class TorrentContext {
+export class TorrentPeerContext {
   // this is used to sign every message leaving the peer
   // it acts as the peer's root identity but not identifier
   // why just the one? no clue just  accept it

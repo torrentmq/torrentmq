@@ -10,14 +10,14 @@ import type {
   TorrentSeederParams,
 } from "./torrent-types";
 import { TorrentSeeder } from "./torrent-seeder";
-import { TorrentContext } from "./torrent-context";
+import { TorrentPeerContext } from "./contexts/torrent-peer-context";
 
 export class TorrentPeer {
   private signaller: TorrentSignaller;
   protected connected: boolean = false;
   private readonly options: TorrentPeerOptions;
 
-  protected ctx: TorrentContext;
+  protected ctx: TorrentPeerContext;
   protected seeders: Map<string, TorrentSeeder> = new Map();
 
   constructor({
@@ -37,7 +37,7 @@ export class TorrentPeer {
       stats_refresh_interval,
       partion_heal_interval,
     };
-    this.ctx = new TorrentContext(store_size);
+    this.ctx = new TorrentPeerContext(store_size);
     this.signaller = new TorrentSignaller();
 
     this.signaller.connect(server_url);
