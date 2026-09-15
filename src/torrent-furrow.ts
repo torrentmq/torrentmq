@@ -84,8 +84,10 @@ export class TorrentFurrow {
       encrypted_message.body,
     );
 
-    //should change to submit instead of publish
-    //or insttead in the ctx publish method handle it
+    // should change to submit instead of publish
+    // or instead in the ctx publish method handle it
+    // just wrong who gives a fuck let them sign it themselves
+    // avoids a massive bottle neck
     const signature = await this.ctx.identity.sign(encrypted_message_body);
     this.peer_ctx.publish({
       type: "PUBLISH",

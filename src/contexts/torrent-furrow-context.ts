@@ -88,6 +88,10 @@ export class TorrentFurrowContext {
       this.peer_ctx.publish({
         type: "PULSE",
         seeder: {
+          id: this.ctx.identifier,
+          name: this.ctx.name,
+        },
+        furrow: {
           id: this._identifier,
           name: this.name,
         },
