@@ -104,12 +104,14 @@ export class TorrentFurrowContext {
       async (msg) => {
         if (!TorrentUtils.is_control_message(msg)) return;
         if (msg.seeder.name !== this.ctx.name) return;
-        if (!msg.furrow || msg.furrow.name !== this.name) return;
+        if (msg.type !== "PUBLISH") {
+          if (!msg.furrow || msg.furrow.name !== this.name) return;
+        } else {
+          if (msg.furrow && msg.furrow.name !== this.name) return;
+        }
+
         switch (msg.type) {
           case "PUBLISH": {
-            if (msg.seeder.name !== this.ctx.name) return;
-            if (msg.furrow && msg.furrow.name !== this.name) return;
-
             const valid_sig = await TorrentUtils.verify_with_key(
               TorrentUtils.to_array_buffer(msg.message.body),
               TorrentUtils.base64_to_buffer(msg.message.artifacts.signature),

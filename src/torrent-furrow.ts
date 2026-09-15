@@ -90,8 +90,8 @@ export class TorrentFurrow {
     this.peer_ctx.publish({
       type: "PUBLISH",
       seeder: {
-        id: this.ctx.identifier,
-        name: this.ctx.name,
+        id: this.seeder_ctx.identifier,
+        name: this.seeder_ctx.name,
       },
       furrow: {
         id: this.ctx.identifier,
