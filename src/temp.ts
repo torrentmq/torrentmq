@@ -2,13 +2,13 @@ import { TorrentPeer } from "./index";
 
 const peer = new TorrentPeer();
 
-const seeder = peer.seeder("orders");
+const seeder = peer.seeder("seeder");
 
 // Create a furrow (queue) and subscribe
-const furrow = seeder.furrow("uk-orders");
-furrow.bind("cool");
+const furrow = seeder.furrow("furrow");
+furrow.bind("routing_key");
 const subscription = furrow.plant(
-  { tag: "gooch", exclusive: true },
+  { tag: "tag", exclusive: true },
   (message) => {
     console.log("received:", message.body);
     if (message.properties.headers?.source === "3") subscription.unplant();

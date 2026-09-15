@@ -68,7 +68,6 @@ export class TorrentSeederContext {
     this.pulse_interval = setInterval(() => {
       this.ctx.publish({
         type: "PULSE",
-        from: this.ctx.identifier,
         seeder: {
           id: this._identifier,
           name: this.name,

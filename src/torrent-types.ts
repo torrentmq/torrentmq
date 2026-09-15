@@ -52,6 +52,7 @@ type TorrentSignalBase = {
 export type TorrentSignalMessage =
   | (TorrentSignalBase & { type: "HELO" })
   | (TorrentSignalBase & { type: "HIHI"; to: string })
+  | (TorrentSignalBase & { type: "YOYO" }) // used instead of HELO and HIHI for partition recovery
   | (TorrentSignalBase & { type: "BYE" })
   | (TorrentSignalBase & { type: "OFFER"; sdp: RTCSessionDescription })
   | (TorrentSignalBase & {
@@ -65,7 +66,7 @@ export type TorrentPeerOptions = {
   min_cluster_size?: number;
   max_cluster_size?: number;
   stats_refresh_interval?: number;
-  partion_heal_interval?: number;
+  partition_heal_interval?: number;
 };
 
 export type TorrentPeerQuality =

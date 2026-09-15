@@ -87,7 +87,6 @@ export class TorrentFurrowContext {
     this.pulse_interval = setInterval(() => {
       this.peer_ctx.publish({
         type: "PULSE",
-        from: this.ctx.identifier,
         seeder: {
           id: this._identifier,
           name: this.name,
@@ -104,6 +103,8 @@ export class TorrentFurrowContext {
       "set",
       async (msg) => {
         if (!TorrentUtils.is_control_message(msg)) return;
+        if (msg.seeder.name !== this.ctx.name) return;
+        if (!msg.furrow || msg.furrow.name !== this.name) return;
         switch (msg.type) {
           case "PUBLISH": {
             if (msg.seeder.name !== this.ctx.name) return;
@@ -139,15 +140,192 @@ export class TorrentFurrowContext {
             const message = new TorrentMessage(
               message_body as TorrentMessageBody,
             );
+
+            // handle different seeder types
+            const routing_key = msg.message.properties?.routing_key;
+            switch (this.ctx.options.type) {
+              case "fanout":
+                // every callback receives every message.
+                break;
+
+              // message must match at least one queue binding.
+              case "direct": {
+                if (!routing_key || !this.routing_keys.has(routing_key)) return;
+                break;
+              }
+              case "topic": {
+                if (!routing_key) return;
+                const matched = [...this.routing_keys].some((binding) =>
+                  this._topic_matches(binding, routing_key),
+                );
+
+                if (!matched) return;
+                break;
+              }
+            }
+
             for (const callback of this._plant_callbacks) {
               callback(message);
             }
 
             break;
           }
+
+          case "PULSE": {
+            if (msg.term < this.current_term || this.eph_key_exchange) return;
+
+            const should_exchange =
+              msg.term > this.current_term ||
+              (msg.term === this.current_term &&
+                msg.created_at < this.created_at);
+
+            if (!should_exchange) return;
+            // send message to init swarm key exchange
+            this.current_term = msg.term;
+            this.eph_key_exchange = TorrentEphemeral.create();
+            const eph_key = await this.eph_key_exchange;
+            this.eph_aes_key = eph_key;
+
+            const eph_public_key_array_buffer: ArrayBuffer =
+              (await this.eph_aes_key.export_public_key("raw")) as ArrayBuffer;
+
+            this.peer_ctx.publish({
+              type: "EPH_KEY_OFFER",
+              to: msg.from,
+              seeder: {
+                id: this.ctx.identifier,
+                name: this.ctx.name,
+              },
+              furrow: { id: this._identifier, name: this.name },
+              eph_public_key: TorrentUtils.buffer_to_base64(
+                eph_public_key_array_buffer,
+              ),
+            });
+            break;
+          }
+
+          case "EPH_KEY_OFFER": {
+            if (this.mode !== "ROOT" || this.eph_aes_key) return;
+            const eph_key = await TorrentEphemeral.create();
+
+            const signature = await this._identity.sign(
+              TorrentUtils.base64_to_buffer(msg.eph_public_key),
+            );
+            const eph_public_key_array_buffer: ArrayBuffer =
+              (await eph_key.export_public_key("raw")) as ArrayBuffer;
+            this.eph_aes_key = eph_key;
+            const aes_salt = TorrentUtils.generate_salt();
+
+            const aes_key = await TorrentUtils.create_aes_key(
+              (await eph_key.export_private_key("crypto")) as CryptoKey,
+              TorrentUtils.base64_to_buffer(msg.eph_public_key),
+              aes_salt,
+            );
+            const encrypted_swarm_key_array_buffer = await TorrentUtils.encrypt(
+              this._swarm_key,
+              aes_key,
+            );
+
+            this.peer_ctx.publish({
+              type: "EPH_KEY_EXCHANGE",
+              to: msg.from,
+              seeder: msg.seeder,
+              furrow: msg.furrow,
+              eph_public_key: TorrentUtils.buffer_to_base64(
+                eph_public_key_array_buffer,
+              ),
+              key_sig: {
+                eph_public_key: msg.eph_public_key,
+                signature: TorrentUtils.buffer_to_base64(signature),
+                identity_public_key: this._public_key,
+              },
+              encrypted: {
+                swarm_key: TorrentUtils.buffer_to_base64(
+                  encrypted_swarm_key_array_buffer,
+                ),
+                aes_salt: TorrentUtils.buffer_to_base64(aes_salt),
+              },
+            });
+
+            break;
+          }
+
+          case "EPH_KEY_EXCHANGE": {
+            if (msg.to !== this.peer_ctx.identifier || !this.eph_aes_key)
+              return;
+            const valid = await TorrentUtils.verify_with_key(
+              (await this.eph_aes_key.export_public_key("raw")) as ArrayBuffer,
+              TorrentUtils.base64_to_buffer(msg.key_sig.signature),
+              msg.key_sig.identity_public_key,
+            );
+
+            if (!valid)
+              throw new TorrentError(
+                "Failed to verify the signature of the ephemeral public key",
+              );
+
+            const aes_salt = TorrentUtils.base64_to_buffer(
+              msg.encrypted.aes_salt,
+            );
+
+            const aes_key = await TorrentUtils.create_aes_key(
+              (await this.eph_aes_key.export_private_key(
+                "crypto",
+              )) as CryptoKey,
+              TorrentUtils.base64_to_buffer(msg.eph_public_key),
+              aes_salt,
+            );
+            const encrypted_swarm_key = TorrentUtils.base64_to_buffer(
+              msg.encrypted.swarm_key,
+            );
+            const swarm_key = await TorrentUtils.decrypt(
+              encrypted_swarm_key,
+              aes_key,
+            );
+
+            if (!swarm_key) return;
+            this._swarm_key = swarm_key;
+            this.mode = "SHADOW"; // ensure to change mode to shadoow
+            this.eph_aes_key = undefined; // ensure to unset
+            this.eph_key_exchange = undefined;
+            if (this.pulse_interval) clearInterval(this.pulse_interval);
+            this.pulse_interval = null;
+
+            break;
+          }
         }
       },
     );
+  }
+
+  private _topic_matches(binding: string, routing_key: string): boolean {
+    const binding_parts = binding.split(".");
+    const routing_parts = routing_key.split(".");
+
+    let i = 0;
+    let j = 0;
+
+    while (i < binding_parts.length) {
+      const binding_part = binding_parts[i];
+
+      if (binding_part === "#") {
+        // # matches zero or more words.
+        return true;
+      }
+
+      if (j >= routing_parts.length) {
+        return false;
+      }
+
+      if (binding_part !== "*" && binding_part !== routing_parts[j]) {
+        return false;
+      }
+
+      i++;
+      j++;
+    }
+
+    return j === routing_parts.length;
   }
 
   private async _initialize(): Promise<void> {

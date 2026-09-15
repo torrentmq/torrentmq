@@ -25,7 +25,7 @@ export class TorrentPeer {
     min_cluster_size = 4,
     max_cluster_size = 8,
     stats_refresh_interval = 60000,
-    partion_heal_interval = 60000,
+    partition_heal_interval = 60000,
     server_url,
   }: TorrentPeerOptions & {
     server_url?: TorrentWebSocketUrl;
@@ -35,7 +35,7 @@ export class TorrentPeer {
       min_cluster_size,
       max_cluster_size,
       stats_refresh_interval,
-      partion_heal_interval,
+      partition_heal_interval,
     };
     this.ctx = new TorrentPeerContext(store_size);
     this.signaller = new TorrentSignaller();
@@ -81,6 +81,18 @@ export class TorrentPeer {
         ),
       );
     }, stats_refresh_interval);
+
+    setInterval(() => {
+      if (this.ctx.connected_peers.size >= this.options.max_cluster_size!)
+        return;
+      if (this.ctx.connected_peers.size < this.options.min_cluster_size!)
+        // request YOYO from signaller or reconnect to random known peer
+        this.signaller.send({
+          message_id: TorrentUtils.random_string(),
+          type: "YOYO",
+          from: this.ctx.identifier,
+        });
+    }, this.options.partition_heal_interval);
   }
 
   seeder(
@@ -117,6 +129,8 @@ export class TorrentPeer {
         return this._handle_helo(msg);
       case "HIHI":
         return this._handle_hihi(msg);
+      case "YOYO":
+        return this._handle_yoyo(msg);
 
       case "OFFER":
         return this._handle_offer(msg);
@@ -136,6 +150,7 @@ export class TorrentPeer {
     // HELO auto-discovery: when a peer broadcasts HELO we start initiating a connection to them
     // if we already have a connection to them, ignore
     if (this.ctx.connected_peers.has(msg.from)) return;
+    if (this.ctx.connected_peers.size >= this.options.max_cluster_size!) return;
 
     // create pc + dc and send OFFER
     this._initiate_connection_to_peer(msg.from);
@@ -150,7 +165,34 @@ export class TorrentPeer {
 
   private _handle_hihi(msg: Extract<TorrentSignalMessage, { type: "HIHI" }>) {
     if (this.ctx.connected_peers.has(msg.from)) return;
+    if (this.ctx.connected_peers.size >= this.options.max_cluster_size!) return;
     this._initiate_connection_to_peer(msg.from);
+  }
+
+  private async _handle_yoyo(
+    msg: Extract<TorrentSignalMessage, { type: "YOYO" }>,
+  ) {
+    const target_id = msg.to ?? msg.from;
+    if (this.ctx.connected_peers.has(target_id)) return;
+
+    if (this.ctx.connected_peers.size >= this.options.max_cluster_size!) return;
+    // this should exict only when
+    // some sort of connection is being made and not before that
+    // this was previously in the
+    // logic for sending a "YOYO" message smh
+    this._evict_worst_peer();
+    // only evict when "healing"
+    // ik this is optimisation and not "healing" but fuck it we ball
+
+    this._initiate_connection_to_peer(target_id);
+    if (msg.to) return;
+    // they might not have discovered this peer so say "YOYO"
+    this.signaller.send({
+      message_id: TorrentUtils.random_string(),
+      type: "YOYO",
+      from: this.ctx.identifier,
+      to: msg.from,
+    });
   }
 
   private async _handle_offer(
@@ -369,5 +411,36 @@ export class TorrentPeer {
       if (!msg.to || msg.to === this.ctx.identifier)
         this.ctx.store.set(msg.control_id, msg);
     }
+  }
+
+  // get the worst peers that can be evicted
+  private _get_worst_peers(num: number = 1): string[] {
+    return Array.from(this.ctx.connected_peers.entries())
+      .sort(([, a], [, b]) => {
+        const dist_a = a.stats?.distance ?? Infinity;
+        const dist_b = b.stats?.distance ?? Infinity;
+        return dist_b - dist_a; // descending (worst first)
+      })
+      .slice(0, num)
+      .map(([peer_id]) => peer_id);
+  }
+
+  private _evict_worst_peer(): void {
+    const overflow =
+      this.ctx.connected_peers.size - this.options.max_cluster_size! + 1; // +1 to allow for adding one more peer
+    if (overflow <= 0) return;
+
+    const worst_peers = this._get_worst_peers(overflow);
+    worst_peers.forEach((peer_id) => this._close_peer_connection(peer_id));
+  }
+
+  private _close_peer_connection(peer_id: string): void {
+    const entry = this.ctx.connected_peers.get(peer_id);
+    if (!entry) return;
+    try {
+      entry.pc.close();
+      entry.dc?.close();
+    } catch (e) {}
+    this.ctx.connected_peers.delete(peer_id);
   }
 }
