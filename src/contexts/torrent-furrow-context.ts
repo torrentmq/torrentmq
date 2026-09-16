@@ -220,7 +220,6 @@ export class TorrentFurrowContext {
             );
             const eph_public_key_array_buffer: ArrayBuffer =
               (await eph_key.export_public_key("raw")) as ArrayBuffer;
-            this.eph_aes_key = eph_key;
             const aes_salt = TorrentUtils.generate_salt();
 
             const aes_key = await TorrentUtils.create_aes_key(
