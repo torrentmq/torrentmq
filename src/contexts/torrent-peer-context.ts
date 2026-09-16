@@ -63,7 +63,7 @@ export class TorrentPeerContext {
     // don't forward if in store
     // it means been received before ie forwarded
     // or it was set by us
-    if (this.store.has(control_w_artifacts.control_id)) return;
+    if (this._store.has(control_w_artifacts.control_id)) return;
     this._forward_msg(control_w_artifacts);
     this._store.set(control_w_artifacts.control_id, control_w_artifacts);
   }

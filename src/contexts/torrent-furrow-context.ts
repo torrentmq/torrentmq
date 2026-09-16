@@ -107,6 +107,7 @@ export class TorrentFurrowContext {
       "set",
       async (msg) => {
         if (!TorrentUtils.is_control_message(msg)) return;
+        if (msg.from === this.peer_ctx.identifier) return;
         if (msg.seeder.name !== this.ctx.name) return;
         if (msg.type !== "PUBLISH") {
           if (!msg.furrow || msg.furrow.name !== this.name) return;

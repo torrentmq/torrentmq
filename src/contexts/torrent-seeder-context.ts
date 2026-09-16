@@ -84,6 +84,7 @@ export class TorrentSeederContext {
       "set",
       async (msg) => {
         if (!TorrentUtils.is_control_message(msg)) return;
+        if (msg.from === this.ctx.identifier) return;
         if (msg.seeder.name !== this.name || msg.furrow) return;
         switch (msg.type) {
           case "PULSE": {

@@ -400,17 +400,15 @@ export class TorrentPeer {
         "Malformed message received. The message may be corrupted or incorrectly formatted.",
       );
 
+    // if message has no destination or it is to us store it
+    // objects with access to the context can attach to the store
+    // and handle messages themselves
+    if (!msg.to || msg.to === this.ctx.identifier)
+      this.ctx.store.set(msg.control_id, msg);
     // store in the data store so is ignored if re_delivered
     // only forward if not seen before or sent by us
-    if (msg.from !== this.ctx.identifier) {
-      // always forward if we are not the recepient
-      if (msg.to !== this.ctx.identifier) this.ctx.publish(msg);
-      // if message has no destination or it is to us store it
-      // objects with access to the context can attach to the store
-      // and handle messages themselves
-      if (!msg.to || msg.to === this.ctx.identifier)
-        this.ctx.store.set(msg.control_id, msg);
-    }
+    // always forward if we are not the recepient
+    if (!msg.to || msg.to !== this.ctx.identifier) this.ctx.publish(msg);
   }
 
   // get the worst peers that can be evicted
