@@ -367,7 +367,9 @@ export class TorrentPeer {
     };
   }
 
-  private async _handle_control_message(msg: TorrentControlMessage) {
+  private async _handle_control_message(
+    msg: TorrentControlMessage,
+  ): Promise<void> {
     // NOTE: de-dup bullshit
     // ignore if message from self
     if (msg.from === this.ctx.identifier) return;
@@ -403,9 +405,8 @@ export class TorrentPeer {
     // if message is to us store it
     // objects with access to the context can attach to the store
     // and handle messages themselves
-    if (msg.to === this.ctx.identifier) this.ctx.store.set(msg.control_id, msg);
     // store in the data store so is ignored if re_delivered
-    // only forward if not seen before or sent by us
+    if (msg.to === this.ctx.identifier) this.ctx.store.set(msg.control_id, msg);
     // always forward if we are not the recepient
     if (!msg.to || msg.to !== this.ctx.identifier) this.ctx.publish(msg);
   }

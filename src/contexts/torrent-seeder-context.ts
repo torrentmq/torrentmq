@@ -143,7 +143,10 @@ export class TorrentSeederContext {
             this.ctx.publish({
               type: "EPH_KEY_EXCHANGE",
               to: msg.from,
-              seeder: msg.seeder,
+              seeder: {
+                id: this._identifier,
+                name: this.name,
+              },
               eph_public_key: TorrentUtils.buffer_to_base64(
                 eph_public_key_array_buffer,
               ),

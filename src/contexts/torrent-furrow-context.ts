@@ -235,8 +235,11 @@ export class TorrentFurrowContext {
             this.peer_ctx.publish({
               type: "EPH_KEY_EXCHANGE",
               to: msg.from,
-              seeder: msg.seeder,
-              furrow: msg.furrow,
+              seeder: {
+                id: this.ctx.identifier,
+                name: this.ctx.name,
+              },
+              furrow: { id: this._identifier, name: this.name },
               eph_public_key: TorrentUtils.buffer_to_base64(
                 eph_public_key_array_buffer,
               ),

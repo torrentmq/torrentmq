@@ -61,8 +61,7 @@ export class TorrentPeerContext {
         : await this._add_message_artifacts(control);
 
     // don't forward if in store
-    // it means been received before ie forwarded
-    // or it was set by us
+    // only forward if not seen before or sent by us
     if (this._store.has(control_w_artifacts.control_id)) return;
     this._forward_msg(control_w_artifacts);
     this._store.set(control_w_artifacts.control_id, control_w_artifacts);
