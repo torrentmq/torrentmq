@@ -6,20 +6,23 @@ import type {
   TorrentSeederParams,
 } from "../torrent-types";
 import type { TorrentPeerContext } from "./torrent-peer-context";
+import { TorrentMessage } from "../torrent-message";
 import { TorrentError } from "../torrent-error";
 import { TorrentIdentity } from "../torrent-identity";
 import { TorrentEphemeral } from "../torrent-ephemeral";
 
 export class TorrentSeederContext {
-  protected _identity!: TorrentIdentity;
+  protected identity!: TorrentIdentity;
   private _identifier!: string;
-  private _public_key!: JsonWebKey;
+  private public_key!: JsonWebKey;
   private _swarm_key!: ArrayBuffer;
 
   readonly ctx: TorrentPeerContext;
 
   readonly name: string;
   readonly options: TorrentSeederParams;
+
+  readonly unsent?: Set<TorrentMessage>;
 
   private mode: TorrentSeederFurrowMode = "UNINITIALIZED";
   private current: { root: string; term: number } = {
@@ -45,6 +48,11 @@ export class TorrentSeederContext {
     this.ctx = ctx;
     this.name = name;
     this.options = options;
+    if (
+      typeof options?.args?.["x_unsent_cache"] === "boolean" &&
+      options?.args?.["x_unsent_cache"] === true
+    )
+      this.unsent = new Set();
 
     this._initialize().then();
     this._reset_election_timeout();
@@ -55,16 +63,56 @@ export class TorrentSeederContext {
     return this._identifier;
   }
 
-  get identity(): TorrentIdentity {
-    return this._identity;
-  }
-
-  get public_key(): JsonWebKey {
-    return this._public_key;
-  }
-
   get swarm_key(): ArrayBuffer {
     return this._swarm_key;
+  }
+
+  async publish(msg: TorrentMessage): Promise<void> {
+    if (this.mode === "UNINITIALIZED" && this.unsent) this.unsent.add(msg);
+    else {
+      const message_body = TorrentUtils.to_array_buffer(msg.body);
+      const encrypted = await TorrentUtils.encrypt(
+        message_body,
+        this._swarm_key,
+      );
+      const mac = await TorrentUtils.generate_mac(encrypted, this._swarm_key);
+      const encrypted_message = new TorrentMessage(
+        TorrentUtils.buffer_to_base64(encrypted),
+      );
+      const encrypted_message_body = TorrentUtils.to_array_buffer(
+        encrypted_message.body,
+      );
+
+      // should change to submit instead of publish
+      // or insttead in the ctx publish method handle it
+      // wrong just publish the message and sign it yourself
+      // all we care about is the message decryption tbh
+      const signature = await this.identity.sign(encrypted_message_body);
+
+      this.ctx.publish({
+        type: "PUBLISH",
+        seeder: { id: this.ctx.identifier, name: this.name },
+        message: {
+          body: encrypted_message.body,
+          properties: msg?.properties,
+          artifacts: {
+            timestamp: Date.now(),
+            mac,
+            public_key: this.public_key,
+            signature: TorrentUtils.buffer_to_base64(signature),
+          },
+        },
+      });
+    }
+  }
+
+  private async _flush_unsent(): Promise<void> {
+    if (this.mode === "UNINITIALIZED" || !this.unsent) return;
+
+    for (const msg of [...this.unsent]) {
+      this.publish(msg);
+      this.unsent.delete(msg);
+    }
   }
 
   private _start_swarm_key_interval(): void {
@@ -136,6 +184,8 @@ export class TorrentSeederContext {
 
       this._start_pulse_interval();
       this._start_swarm_key_interval();
+
+      this._flush_unsent();
     }, timeout);
   }
 
@@ -214,7 +264,7 @@ export class TorrentSeederContext {
             if (this.mode !== "ROOT" || this.eph_exchanges.size > 0) return;
             const eph_key = await TorrentEphemeral.create();
 
-            const signature = await this._identity.sign(
+            const signature = await this.identity.sign(
               TorrentUtils.base64_to_buffer(msg.eph_public_key),
             );
             const eph_public_key_array_buffer: ArrayBuffer =
@@ -241,7 +291,7 @@ export class TorrentSeederContext {
               key_sig: {
                 eph_public_key: msg.eph_public_key,
                 signature: TorrentUtils.buffer_to_base64(signature),
-                identity_public_key: this._public_key,
+                identity_public_key: this.public_key,
               },
               encrypted: {
                 swarm_key: TorrentUtils.buffer_to_base64(
@@ -295,6 +345,7 @@ export class TorrentSeederContext {
             this._clear_intervals();
             this._reset_election_timeout();
 
+            this._flush_unsent();
             break;
           }
         }
@@ -303,9 +354,9 @@ export class TorrentSeederContext {
   }
 
   private async _initialize(): Promise<void> {
-    this._identity = await TorrentIdentity.create();
-    this._identifier = await this._identity.get_identifier();
-    this._public_key = (await this._identity.export_public_key()) as JsonWebKey;
+    this.identity = await TorrentIdentity.create();
+    this._identifier = await this.identity.get_identifier();
+    this.public_key = (await this.identity.export_public_key()) as JsonWebKey;
     this._swarm_key = await TorrentUtils.generate_swarm_key();
   }
 }

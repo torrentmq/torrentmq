@@ -30,17 +30,28 @@ export class TorrentFurrow {
 
       routing_keys: undefined,
 
-      args: undefined,
+      args: {
+        x_unsent_cache: true,
+      },
       exclusive: false,
     };
 
     for (const arg of [arg1, arg2]) {
       if (typeof arg === "string") name = arg;
-      else if (arg) options = { ...options, ...arg };
+      else if (arg)
+        options = {
+          ...options,
+          ...arg,
+          args: { ...options.args, ...arg.args },
+        };
     }
 
     this.seeder_ctx = ctx;
     this.ctx = new TorrentFurrowContext({ ctx, name, options });
+  }
+
+  get identifier(): string {
+    return this.ctx.identifier;
   }
 
   get name(): string {
@@ -69,47 +80,10 @@ export class TorrentFurrow {
 
     const message = new TorrentMessage(body, {
       ...params,
-      source: this.ctx.identifier,
+      source: this.peer_ctx.identifier,
     });
-    const message_body = TorrentUtils.to_array_buffer(message.body);
-    const encrypted = await TorrentUtils.encrypt(
-      message_body,
-      this.ctx.swarm_key,
-    );
-    const mac = await TorrentUtils.generate_mac(encrypted, this.ctx.swarm_key);
-    const encrypted_message = new TorrentMessage(
-      TorrentUtils.buffer_to_base64(encrypted),
-    );
-    const encrypted_message_body = TorrentUtils.to_array_buffer(
-      encrypted_message.body,
-    );
 
-    // should change to submit instead of publish
-    // or instead in the ctx publish method handle it
-    // just wrong who gives a fuck let them sign it themselves
-    // avoids a massive bottle neck
-    const signature = await this.ctx.identity.sign(encrypted_message_body);
-    this.peer_ctx.publish({
-      type: "PUBLISH",
-      seeder: {
-        id: this.seeder_ctx.identifier,
-        name: this.seeder_ctx.name,
-      },
-      furrow: {
-        id: this.ctx.identifier,
-        name: this.ctx.name,
-      },
-      message: {
-        body: encrypted_message.body,
-        properties: message?.properties,
-        artifacts: {
-          timestamp: Date.now(),
-          mac,
-          public_key: this.ctx.public_key,
-          signature: TorrentUtils.buffer_to_base64(signature),
-        },
-      },
-    });
+    await this.ctx.publish(message);
   }
 
   bind(routing_key: string): void {

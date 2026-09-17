@@ -30,16 +30,27 @@ export class TorrentSeeder {
       type: "direct",
       internal: false,
 
-      args: undefined,
+      args: {
+        x_unsent_cache: true,
+      },
     };
 
     for (const arg of [arg1, arg2]) {
       if (typeof arg === "string") name = arg;
-      else if (arg) options = { ...options, ...arg };
+      else if (arg)
+        options = {
+          ...options,
+          ...arg,
+          args: { ...options.args, ...arg.args },
+        };
     }
 
     this.peer_ctx = ctx;
     this.ctx = new TorrentSeederContext({ ctx, name, options });
+  }
+
+  get identifier(): string {
+    return this.ctx.identifier;
   }
 
   get name(): string {
@@ -66,48 +77,14 @@ export class TorrentSeeder {
       ...params,
       source: this.peer_ctx.identifier,
     });
-    const message_body = TorrentUtils.to_array_buffer(message.body);
-    const encrypted = await TorrentUtils.encrypt(
-      message_body,
-      this.ctx.swarm_key,
-    );
-    const mac = await TorrentUtils.generate_mac(encrypted, this.ctx.swarm_key);
-    const encrypted_message = new TorrentMessage(
-      TorrentUtils.buffer_to_base64(encrypted),
-    );
-    const encrypted_message_body = TorrentUtils.to_array_buffer(
-      encrypted_message.body,
-    );
 
-    // should change to submit instead of publish
-    // or insttead in the ctx publish method handle it
-    // wrong just publish the message and sign it yourself
-    // all we care about is the message decryption tbh
-    const signature = await this.ctx.identity.sign(encrypted_message_body);
-    this.peer_ctx.publish({
-      type: "PUBLISH",
-      from: this.peer_ctx.identifier,
-      seeder: {
-        id: this.ctx.identifier,
-        name: this.ctx.name,
-      },
-      message: {
-        body: encrypted_message.body,
-        properties: message?.properties,
-        artifacts: {
-          timestamp: Date.now(),
-          mac,
-          public_key: this.ctx.public_key,
-          signature: TorrentUtils.buffer_to_base64(signature),
-        },
-      },
-    });
+    await this.ctx.publish(message);
   }
 
   furrow(
     arg1?: string | TorrentFurrowParams,
     arg2?: string | TorrentFurrowParams,
-  ) {
+  ): TorrentFurrow {
     // if u couldn't tell arleady i copy and pasted this
     let name: string | undefined;
     let options: TorrentFurrowParams | undefined;

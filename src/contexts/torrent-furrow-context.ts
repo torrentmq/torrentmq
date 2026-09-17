@@ -15,15 +15,17 @@ import { TorrentEphemeral } from "../torrent-ephemeral";
 import { TorrentMessage } from "../torrent-message";
 
 export class TorrentFurrowContext {
-  protected _identity!: TorrentIdentity;
+  protected identity!: TorrentIdentity;
   private _identifier!: string;
-  private _public_key!: JsonWebKey;
-  private _swarm_key!: ArrayBuffer;
+  private public_key!: JsonWebKey;
+  private swarm_key!: ArrayBuffer;
 
   protected ctx: TorrentSeederContext;
 
   readonly name: string;
   options: TorrentFurrowParams;
+
+  readonly unsent?: Set<TorrentMessage>;
 
   private _routing_keys: Set<string> = new Set<string>();
   private _plant_callbacks: Set<TorrentCallback> = new Set<TorrentCallback>();
@@ -52,6 +54,11 @@ export class TorrentFurrowContext {
     this.ctx = ctx;
     this.name = name;
     this.options = options;
+    if (
+      typeof options?.args?.["x_unsent_cache"] === "boolean" &&
+      options?.args?.["x_unsent_cache"] === true
+    )
+      this.unsent = new Set();
 
     this._initialize().then();
     this._reset_election_timeout();
@@ -60,18 +67,6 @@ export class TorrentFurrowContext {
 
   get identifier(): string {
     return this._identifier;
-  }
-
-  get identity(): TorrentIdentity {
-    return this._identity;
-  }
-
-  get public_key(): JsonWebKey {
-    return this._public_key;
-  }
-
-  get swarm_key(): ArrayBuffer {
-    return this._swarm_key;
   }
 
   get peer_ctx(): TorrentPeerContext {
@@ -84,6 +79,56 @@ export class TorrentFurrowContext {
 
   get routing_keys(): Set<string> {
     return this._routing_keys;
+  }
+
+  async publish(msg: TorrentMessage): Promise<void> {
+    if (this.mode === "UNINITIALIZED" && this.unsent) this.unsent.add(msg);
+    else {
+      const message_body = TorrentUtils.to_array_buffer(msg.body);
+      const encrypted = await TorrentUtils.encrypt(
+        message_body,
+        this.swarm_key,
+      );
+      const mac = await TorrentUtils.generate_mac(encrypted, this.swarm_key);
+      const encrypted_message = new TorrentMessage(
+        TorrentUtils.buffer_to_base64(encrypted),
+      );
+      const encrypted_message_body = TorrentUtils.to_array_buffer(
+        encrypted_message.body,
+      );
+
+      // should change to submit instead of publish
+      // or instead in the ctx publish method handle it
+      // just wrong who gives a fuck let them sign it themselves
+      // avoids a massive bottle neck
+      // why the fuck did i do this comment above twice
+      const signature = await this.identity.sign(encrypted_message_body);
+
+      this.peer_ctx.publish({
+        type: "PUBLISH",
+        seeder: { id: this.ctx.identifier, name: this.ctx.name },
+        furrow: { id: this.ctx.identifier, name: this.ctx.name },
+        message: {
+          body: encrypted_message.body,
+          properties: msg?.properties,
+          artifacts: {
+            timestamp: Date.now(),
+            mac,
+            public_key: this.public_key,
+            signature: TorrentUtils.buffer_to_base64(signature),
+          },
+        },
+      });
+    }
+  }
+
+  private async _flush_unsent(): Promise<void> {
+    if (this.mode === "UNINITIALIZED" || !this.unsent) return;
+
+    for (const msg of [...this.unsent]) {
+      this.publish(msg);
+      this.unsent.delete(msg);
+    }
   }
 
   private _start_swarm_key_interval(): void {
@@ -159,6 +204,8 @@ export class TorrentFurrowContext {
 
       this._start_pulse_interval();
       this._start_swarm_key_interval();
+
+      this._flush_unsent();
     }, timeout);
   }
 
@@ -211,7 +258,7 @@ export class TorrentFurrowContext {
 
             if (!valid_sig) return;
 
-            const swarm_key = msg.furrow ? this._swarm_key : this.ctx.swarm_key;
+            const swarm_key = msg.furrow ? this.swarm_key : this.ctx.swarm_key;
             let decrypted_msg: ArrayBuffer | undefined;
 
             const valid_mac = await TorrentUtils.verify_mac(
@@ -336,7 +383,7 @@ export class TorrentFurrowContext {
                 if (this.mode !== "ROOT" || this.eph_exchanges.size > 0) return;
                 const eph_key = await TorrentEphemeral.create();
 
-                const signature = await this._identity.sign(
+                const signature = await this.identity.sign(
                   TorrentUtils.base64_to_buffer(msg.eph_public_key),
                 );
                 const eph_public_key_array_buffer: ArrayBuffer =
@@ -349,7 +396,7 @@ export class TorrentFurrowContext {
                   aes_salt,
                 );
                 const encrypted_swarm_key_array_buffer =
-                  await TorrentUtils.encrypt(this._swarm_key, aes_key);
+                  await TorrentUtils.encrypt(this.swarm_key, aes_key);
 
                 this.peer_ctx.publish({
                   type: "EPH_KEY_EXCHANGE",
@@ -362,7 +409,7 @@ export class TorrentFurrowContext {
                   key_sig: {
                     eph_public_key: msg.eph_public_key,
                     signature: TorrentUtils.buffer_to_base64(signature),
-                    identity_public_key: this._public_key,
+                    identity_public_key: this.public_key,
                   },
                   encrypted: {
                     swarm_key: TorrentUtils.buffer_to_base64(
@@ -409,13 +456,14 @@ export class TorrentFurrowContext {
                 );
 
                 if (!swarm_key) return;
-                this._swarm_key = swarm_key;
+                this.swarm_key = swarm_key;
                 this.mode = "SHADOW"; // ensure to change mode to SHADOW
                 this.eph_exchanges.delete(msg.from); // ensure to unset
                 // reset all intervals in initiate watch for pulses
                 this._clear_intervals();
                 this._reset_election_timeout();
 
+                this._flush_unsent();
                 break;
               }
             }
@@ -426,10 +474,10 @@ export class TorrentFurrowContext {
   }
 
   private async _initialize(): Promise<void> {
-    this._identity = await TorrentIdentity.create();
-    this._identifier = await this._identity.get_identifier();
-    this._public_key = (await this._identity.export_public_key()) as JsonWebKey;
-    this._swarm_key = await TorrentUtils.generate_swarm_key();
+    this.identity = await TorrentIdentity.create();
+    this._identifier = await this.identity.get_identifier();
+    this.public_key = (await this.identity.export_public_key()) as JsonWebKey;
+    this.swarm_key = await TorrentUtils.generate_swarm_key();
     // set routing keys if passed in
     this._routing_keys = new Set(this.options.routing_keys);
   }
