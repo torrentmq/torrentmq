@@ -25,7 +25,7 @@ export class TorrentPeer {
     min_cluster_size = 4,
     max_cluster_size = 8,
     stats_refresh_interval = 60000,
-    partition_heal_interval = 60000,
+    partition_heal_interval = 600_000,
     server_url,
   }: TorrentPeerOptions & {
     server_url?: TorrentWebSocketUrl;
@@ -93,6 +93,10 @@ export class TorrentPeer {
           from: this.ctx.identifier,
         });
     }, this.options.partition_heal_interval);
+  }
+
+  get identifier(): string {
+    return this.ctx.identifier;
   }
 
   seeder(

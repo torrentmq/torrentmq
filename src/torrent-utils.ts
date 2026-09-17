@@ -4,6 +4,7 @@ import type {
   TorrentMessageParams,
   TorrentPeerQuality,
   TorrentControlMessage,
+  TorrentPeerEntry,
 } from "./torrent-types";
 import { TorrentError } from "./torrent-error";
 
@@ -312,7 +313,7 @@ export class TorrentUtils {
 
     const plr = Math.max(outbound_plr, inbound_plr);
     const cost = rtt * 1000 + plr * 5000 + jitter * 1000 + 1 / (aob + 1);
-    const quality = TorrentUtils.get_peer_quality({
+    const quality = this._get_peer_quality({
       plr,
       rtt,
       jitter,
@@ -335,7 +336,7 @@ export class TorrentUtils {
     return alpha * cost + (1 - alpha) * prev_distance;
   }
 
-  static get_peer_quality(metrics: {
+  private static _get_peer_quality(metrics: {
     plr: number;
     rtt: number;
     jitter: number;
@@ -348,6 +349,40 @@ export class TorrentUtils {
     else if (rtt < 1.5 && plr < 0.2 && jitter < 0.1) return "POOR";
     else if (rtt >= 1.5 || plr >= 0.2 || jitter >= 0.1) return "BAD";
     else return "DEAD";
+  }
+
+  static calculate_timeout(peer_map: Map<string, TorrentPeerEntry>): number {
+    const peers = [...peer_map.values()];
+    const windows = peers
+      .filter(
+        (p): p is typeof p & { stats: NonNullable<typeof p.stats> } =>
+          p.stats !== undefined,
+      )
+      .map((p) => {
+        const stats = p.stats;
+        const rtt = Math.max(stats.rtt ?? 500, 1);
+        const plr = Math.min(Math.max(stats.plr ?? 0, 0), 1);
+        const jitter = Math.max(stats.jitter ?? 0, 0);
+        const aob = Math.max(stats.aob ?? 0, 1);
+        const distance = Math.max(stats.distance ?? 0, 0);
+        const cost = Math.max(stats.cost ?? 0, 0);
+
+        const instability = 1 + plr * 10 + jitter / rtt;
+
+        const capacity = Math.sqrt(aob / 1_000_000);
+
+        const propagation = 1 + distance / 100;
+
+        const economic = 1 + cost;
+
+        return (
+          (rtt * instability * propagation * economic) / Math.max(capacity, 0.1)
+        );
+      });
+
+    if (!windows.length) return 5_000;
+    const window = windows.reduce((a, b) => a + b, 0) / windows.length;
+    return Math.min(Math.max(100, window), 10_000);
   }
 
   // something???

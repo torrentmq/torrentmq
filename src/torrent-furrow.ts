@@ -26,7 +26,7 @@ export class TorrentFurrow {
       passive: false,
       durable: false,
       auto_delete: true,
-      key_refresh: 60000,
+      key_refresh: 600_000,
 
       routing_keys: undefined,
 

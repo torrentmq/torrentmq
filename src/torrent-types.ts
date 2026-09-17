@@ -140,7 +140,6 @@ export type TorrentControlMessage =
   | (TorrentControlPeerInfo & {
       type: "PULSE";
       term: number;
-      created_at: number;
       options: unknown;
     });
 
@@ -168,7 +167,7 @@ export type TorrentConsumeParams = {
   exclusive?: boolean;
 };
 
-export type TorrentSeederFurrowMode = "ROOT" | "SHADOW";
+export type TorrentSeederFurrowMode = "ROOT" | "SHADOW" | "UNINITIALIZED";
 
 export type TorrentSubscription = {
   unplant(): void;

@@ -21,14 +21,17 @@ export class TorrentSeederContext {
   readonly name: string;
   readonly options: TorrentSeederParams;
 
-  private mode: TorrentSeederFurrowMode = "ROOT";
+  private mode: TorrentSeederFurrowMode = "UNINITIALIZED";
+  private current: { root: string; term: number } = {
+    root: "",
+    term: 0,
+  };
 
-  private eph_aes_key?: TorrentEphemeral;
-  private eph_key_exchange?: Promise<TorrentEphemeral>;
+  protected eph_exchanges: Map<string, TorrentEphemeral> = new Map();
 
-  private current_term: number = 1;
-  readonly created_at: number = Date.now();
   private pulse_interval: ReturnType<typeof setInterval> | null = null;
+  private swarm_key_interval: ReturnType<typeof setInterval> | null = null;
+  private election_timeout: ReturnType<typeof setTimeout> | null = null;
 
   constructor({
     ctx,
@@ -44,8 +47,8 @@ export class TorrentSeederContext {
     this.options = options;
 
     this._initialize().then();
+    this._reset_election_timeout();
     this._attach_handlers();
-    this._start_intervals();
   }
 
   get identifier(): string {
@@ -64,19 +67,76 @@ export class TorrentSeederContext {
     return this._swarm_key;
   }
 
-  private _start_intervals(): void {
+  private _start_swarm_key_interval(): void {
+    if (this.swarm_key_interval) {
+      clearInterval(this.swarm_key_interval);
+      this.swarm_key_interval = null;
+    }
+
+    this.swarm_key_interval = setInterval(() => {
+      this.ctx.publish({
+        type: "SWARM_KEY_REFRESH",
+        seeder: { id: this._identifier, name: this.name },
+      });
+    }, this.options.key_refresh);
+  }
+
+  private _start_pulse_interval(): void {
+    if (this.pulse_interval) {
+      clearInterval(this.pulse_interval);
+      this.pulse_interval = null;
+    }
+
+    const timeout = TorrentUtils.calculate_timeout(this.ctx.connected_peers);
+
     this.pulse_interval = setInterval(() => {
       this.ctx.publish({
         type: "PULSE",
-        seeder: {
-          id: this._identifier,
-          name: this.name,
-        },
-        term: this.current_term,
-        created_at: this.created_at,
+        seeder: { id: this._identifier, name: this.name },
+        term: this.current.term,
         options: this.options,
       });
-    }, 5000);
+    }, timeout);
+  }
+
+  private _clear_intervals(): void {
+    if (this.pulse_interval) {
+      clearInterval(this.pulse_interval);
+      this.pulse_interval = null;
+    }
+
+    if (this.swarm_key_interval) {
+      clearInterval(this.swarm_key_interval);
+      this.swarm_key_interval = null;
+    }
+  }
+
+  private _reset_election_timeout(): void {
+    if (this.election_timeout) {
+      clearTimeout(this.election_timeout);
+      this.election_timeout = null;
+    }
+
+    const random_multiplier = 0.75 + Math.random() * 0.75;
+    const base = TorrentUtils.calculate_timeout(this.ctx.connected_peers);
+    const timeout = Math.min(
+      Math.max(base * random_multiplier, 10_000),
+      60_000,
+    );
+
+    this.election_timeout = setTimeout(() => {
+      this.current = { root: this._identifier, term: this.current.term + 1 };
+      this.eph_exchanges.clear();
+      this.mode = "ROOT";
+
+      if (this.election_timeout) {
+        clearTimeout(this.election_timeout);
+        this.election_timeout = null;
+      }
+
+      this._start_pulse_interval();
+      this._start_swarm_key_interval();
+    }, timeout);
   }
 
   private _attach_handlers(): void {
@@ -88,30 +148,61 @@ export class TorrentSeederContext {
         if (msg.seeder.name !== this.name || msg.furrow) return;
         switch (msg.type) {
           case "PULSE": {
-            if (msg.term < this.current_term || this.eph_key_exchange) return;
+            if (msg.term < this.current.term) return;
+            if (
+              msg.term === this.current.term &&
+              msg.seeder.id === this.current.root
+            ) {
+              this.mode = "SHADOW";
+              this._clear_intervals();
+              this._reset_election_timeout();
+              return;
+            }
+            if (msg.term > this.current.term) {
+              // we heard from the current leader, so step down if we thought
+              // we were the leader, and wait for the next pulse before we
+              // consider starting a new election.
+              this.mode = "UNINITIALIZED";
+              this._clear_intervals();
 
-            const should_exchange =
-              msg.term > this.current_term ||
-              (msg.term === this.current_term &&
-                msg.created_at < this.created_at);
+              this.current = { root: msg.seeder.id, term: msg.term };
 
-            if (!should_exchange) return;
-            // send message to init swarm key exchange
-            this.current_term = msg.term;
-            this.eph_key_exchange = TorrentEphemeral.create();
-            const eph_key = await this.eph_key_exchange;
-            this.eph_aes_key = eph_key;
+              this._reset_election_timeout();
+
+              const exchange = this.eph_exchanges.get(msg.from);
+              if (exchange) return;
+              // send message to init swarm key exchange
+              const eph_key = await TorrentEphemeral.create();
+              this.eph_exchanges.set(msg.from, eph_key);
+
+              const eph_public_key_array_buffer: ArrayBuffer =
+                (await eph_key.export_public_key("raw")) as ArrayBuffer;
+
+              this.ctx.publish({
+                type: "EPH_KEY_OFFER",
+                to: msg.from,
+                seeder: { id: this._identifier, name: this.name },
+                eph_public_key: TorrentUtils.buffer_to_base64(
+                  eph_public_key_array_buffer,
+                ),
+              });
+            }
+            break;
+          }
+
+          case "SWARM_KEY_REFRESH": {
+            if (this.current.root !== msg.seeder.id) return;
+            const eph_key = await TorrentEphemeral.create();
+            this.eph_exchanges.set(msg.from, eph_key);
 
             const eph_public_key_array_buffer: ArrayBuffer =
-              (await this.eph_aes_key.export_public_key("raw")) as ArrayBuffer;
+              (await eph_key.export_public_key("raw")) as ArrayBuffer;
 
             this.ctx.publish({
               type: "EPH_KEY_OFFER",
               to: msg.from,
-              seeder: {
-                id: this._identifier,
-                name: this.name,
-              },
+              seeder: { id: this._identifier, name: this.name },
+
               eph_public_key: TorrentUtils.buffer_to_base64(
                 eph_public_key_array_buffer,
               ),
@@ -120,7 +211,7 @@ export class TorrentSeederContext {
           }
 
           case "EPH_KEY_OFFER": {
-            if (this.mode !== "ROOT" || this.eph_aes_key) return;
+            if (this.mode !== "ROOT" || this.eph_exchanges.size > 0) return;
             const eph_key = await TorrentEphemeral.create();
 
             const signature = await this._identity.sign(
@@ -143,10 +234,7 @@ export class TorrentSeederContext {
             this.ctx.publish({
               type: "EPH_KEY_EXCHANGE",
               to: msg.from,
-              seeder: {
-                id: this._identifier,
-                name: this.name,
-              },
+              seeder: { id: this._identifier, name: this.name },
               eph_public_key: TorrentUtils.buffer_to_base64(
                 eph_public_key_array_buffer,
               ),
@@ -167,9 +255,12 @@ export class TorrentSeederContext {
           }
 
           case "EPH_KEY_EXCHANGE": {
-            if (msg.to !== this.ctx.identifier || !this.eph_aes_key) return;
+            if (msg.to !== this.ctx.identifier) return;
+            const exchange = this.eph_exchanges.get(msg.from);
+            if (!exchange) return;
+
             const valid = await TorrentUtils.verify_with_key(
-              (await this.eph_aes_key.export_public_key("raw")) as ArrayBuffer,
+              (await exchange.export_public_key("raw")) as ArrayBuffer,
               TorrentUtils.base64_to_buffer(msg.key_sig.signature),
               msg.key_sig.identity_public_key,
             );
@@ -184,9 +275,7 @@ export class TorrentSeederContext {
             );
 
             const aes_key = await TorrentUtils.create_aes_key(
-              (await this.eph_aes_key.export_private_key(
-                "crypto",
-              )) as CryptoKey,
+              (await exchange.export_private_key("crypto")) as CryptoKey,
               TorrentUtils.base64_to_buffer(msg.eph_public_key),
               aes_salt,
             );
@@ -200,11 +289,11 @@ export class TorrentSeederContext {
 
             if (!swarm_key) return;
             this._swarm_key = swarm_key;
-            this.mode = "SHADOW"; // ensure to change mode to shadoow
-            this.eph_aes_key = undefined; // ensure to unset
-            this.eph_key_exchange = undefined;
-            if (this.pulse_interval) clearInterval(this.pulse_interval);
-            this.pulse_interval = null;
+            this.mode = "SHADOW"; // ensure to change mode to SHADOW
+            this.eph_exchanges.delete(msg.from); // ensure to unset
+            // reset all intervals in initiate watch for pulses
+            this._clear_intervals();
+            this._reset_election_timeout();
 
             break;
           }

@@ -25,7 +25,7 @@ export class TorrentSeeder {
       passive: false,
       durable: false,
       auto_delete: false,
-      key_refresh: 60000,
+      key_refresh: 600_000,
 
       type: "direct",
       internal: false,
