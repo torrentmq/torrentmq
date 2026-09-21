@@ -112,10 +112,10 @@ const subscription = furrow.plant(
   (message) => {
     console.log("Received payload:", message.body);
     console.log("Sender identity:", message.properties.headers?.source);
-    
+
     // Stop receiving messages when done
     subscription.unplant();
-  }
+  },
 );
 ```
 
@@ -136,7 +136,7 @@ furrow.plant((message) => {
 // Publish matching routing keys
 await topicSeeder.send(
   { userId: "usr_99", status: "pending" },
-  { routing_key: "user.eu.created" }
+  { routing_key: "user.eu.created" },
 );
 ```
 
@@ -149,12 +149,15 @@ await topicSeeder.send(
 `TorrentPeer` represents the local mesh node.
 
 #### `constructor(options?: TorrentPeerOptions & { server_url?: TorrentWebSocketUrl; store_size?: number })`
+
 Creates a peer node and connects to the signalling server.
 
 #### `get identifier(): string`
+
 Returns the cryptographic identity hash of the underlying peer context.
 
 #### `seeder(name?: string, options?: TorrentSeederParams): TorrentSeeder`
+
 Returns an existing `TorrentSeeder` instance by name, or creates a new one if it does not exist.
 
 ---
@@ -164,18 +167,23 @@ Returns an existing `TorrentSeeder` instance by name, or creates a new one if it
 `TorrentSeeder` acts as the exchange for routing messages.
 
 #### `get identifier(): string`
+
 Returns the public hash identifier of the seeder.
 
 #### `get name(): string`
+
 Returns the string name assigned to the seeder.
 
 #### `get options(): TorrentSeederParams`
+
 Returns configuration options assigned to the seeder.
 
 #### `send(body?: TorrentMessageBody, params?: TorrentMessageParams): Promise<void>`
+
 Publishes a payload through the seeder across the peer mesh.
 
 #### `furrow(name?: string, options?: TorrentFurrowParams): TorrentFurrow`
+
 Returns an existing child `TorrentFurrow` or creates a new one bound to this seeder.
 
 ---
@@ -185,24 +193,31 @@ Returns an existing child `TorrentFurrow` or creates a new one bound to this see
 `TorrentFurrow` acts as a message queue attached to a seeder.
 
 #### `get identifier(): string`
+
 Returns the public hash identifier of the furrow.
 
 #### `get name(): string`
+
 Returns the string name assigned to the furrow.
 
 #### `get options(): TorrentFurrowParams`
+
 Returns configuration options assigned to the furrow.
 
 #### `send(body?: TorrentMessageBody, params?: TorrentMessageParams): Promise<void>`
+
 Publishes a message directly targetting this furrow.
 
 #### `bind(routing_key: string): void`
+
 Registers a routing pattern for message filtering.
 
 #### `unbind(routing_key: string): void`
+
 Removes a registered routing key.
 
 #### `plant(callback: TorrentCallback, params?: TorrentConsumeParams): TorrentSubscription`
+
 Registers a callback to consume incoming messages matching this furrow.
 
 ---
@@ -212,6 +227,7 @@ Registers a callback to consume incoming messages matching this furrow.
 Constructs and serializes payloads routed through the mesh.
 
 #### Properties
+
 - `body`: `TorrentMessageBody` (Primitive, ArrayBuffer, TypedArray, Object, Map, Set, Date, RegExp, BigInt).
 - `properties`: `TorrentMessageProperties` (Headers, routing key, content type, TTL, message ID, body size).
 - `on_ack`: Optional callback executed when an explicit `ACK` control frame is returned.
@@ -223,12 +239,15 @@ Constructs and serializes payloads routed through the mesh.
 Extends `TorrentEmitter`. Handles WebSocket connection management to the signaling server.
 
 #### `connect(server_url?: TorrentWebSocketUrl): void`
+
 Establishes a WebSocket connection to the designated signaller endpoint.
 
 #### `disconnect(): void`
+
 Closes active WebSocket connections.
 
 #### `send(msg: TorrentSignalMessage): void`
+
 Transmits raw signalling frames (`HELO`, `HIHI`, `YOYO`, `OFFER`, `ANSWER`, `ICE`).
 
 ---
@@ -238,15 +257,19 @@ Transmits raw signalling frames (`HELO`, `HIHI`, `YOYO`, `OFFER`, `ANSWER`, `ICE
 Encapsulates Web Crypto API ECDSA `P-256` keypair operations.
 
 #### `static create(): Promise<TorrentIdentity>`
+
 Generates a new ECDSA `P-256` key pair.
 
 #### `get_identifier(): Promise<string>`
+
 Exports the public key, hashes it via SHA-256, and returns a URL-safe Base64 identifier.
 
 #### `sign(data: ArrayBuffer): Promise<ArrayBuffer>`
+
 Signs binary data with the private key using SHA-256 hashing.
 
 #### `export_public_key(format?: KeyFormat): Promise<ArrayBuffer | JsonWebKey | CryptoKey>`
+
 Exports the public key in standard representations (`jwk`, `spki`, `raw`, `crypto`).
 
 ---
@@ -256,9 +279,11 @@ Exports the public key in standard representations (`jwk`, `spki`, `raw`, `crypt
 Extends `TorrentEmitter<"set">`. Implements a Least-Recently-Used double-linked-list cache used internally for message de-duplication.
 
 #### `get(key: K): V | undefined`
+
 Retrieves an item and moves it to the head of the cache.
 
 #### `set(key: K, value: V): void`
+
 Inserts or updates an item. Evicts the oldest tail item if cache capacity exceeds `capacity` (default: 512).
 
 ---
@@ -276,11 +301,13 @@ Inserts or updates an item. Evicts the oldest tail item if cache capacity exceed
 ```
 
 ### Identity Layer (ECDSA P-256)
+
 - Every node generates a non-extractable Web Crypto API ECDSA `P-256` keypair (`TorrentIdentity`).
 - Outgoing control frames carry an `artifacts` envelope containing `public_key` (JWK), `timestamp`, and `signature`.
 - Neighbors verify message authenticity via `TorrentUtils.verify_with_key` before relaying or processing packets.
 
 ### Encryption Layer (AES-GCM 256)
+
 - Content bodies are encrypted using 256-bit AES-GCM with a 12-byte initialization vector (IV) prepended to the ciphertext.
 - Message envelopes include HMAC-SHA256 signatures (`mac`) derived from the swarm key to guarantee integrity.
 - Swarm keys are distributed via Diffie-Hellman Key Exchange (`TorrentEphemeral` using `ECDH P-256`) and HKDF key derivation.
@@ -324,12 +351,15 @@ $$\text{Cost} = \text{RTT} \cdot 1000 + \text{PLR} \cdot 5000 + \text{Jitter} \c
 ## Internal Contexts
 
 ### TorrentPeerContext
+
 Tracks cluster states (`connected_peers`), manages the de-duplication LRU cache (`store`), signs control payloads, and routes candidate streams.
 
 ### TorrentSeederContext
+
 Manages exchange state machine transitions (`ROOT`, `SHADOW`, `WAITING`), handles `SWARM_KEY_REFRESH`, and coordinates ephemeral ECDH handshakes for key distribution.
 
 ### TorrentFurrowContext
+
 Handles queue-level subscriptions, executes pattern-matching algorithms, verifies payload HMAC signatures, decrypts message bodies, and dispatches callbacks.
 
 ---
@@ -351,12 +381,7 @@ Handles queue-level subscriptions, executes pattern-matching algorithms, verifie
 
 ```typescript
 export type TorrentMessageBody =
-  | Uint8Array
-  | string
-  | number
-  | boolean
-  | object
-  | null;
+  Uint8Array | string | number | boolean | object | null;
 
 export type TorrentMessageHeaders = {
   hop_count?: number;
@@ -376,12 +401,7 @@ export type TorrentMessageProperties = {
 };
 
 export type TorrentPeerQuality =
-  | "EXCELLENT"
-  | "GOOD"
-  | "FAIR"
-  | "POOR"
-  | "BAD"
-  | "DEAD";
+  "EXCELLENT" | "GOOD" | "FAIR" | "POOR" | "BAD" | "DEAD";
 
 export type TorrentSeederParams = {
   passive?: boolean;
@@ -420,11 +440,6 @@ export type TorrentSubscription = {
 
 Internal network behavior is governed by defaults defined in `torrent-consts.ts`:
 
-| Constant | Default Value | Description |
-| --- | --- | --- |
-| `TORRENT_PORT` | `8765` | Default port used for WebSocket signalling servers. |
-| `MIN_FAILOVER_TIMEOUT` | `2000` | Minimum failover threshold in milliseconds. |
-| `FAILOVER_RTT_MULTIPLIER` | `5` | Multiplier applied to cluster RTT when computing heartbeat tolerances. |
-
-```
-```
+| Constant       | Default Value | Description                                         |
+| -------------- | ------------- | --------------------------------------------------- |
+| `TORRENT_PORT` | `8765`        | Default port used for WebSocket signalling servers. |
