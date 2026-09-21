@@ -167,7 +167,7 @@ export type TorrentConsumeParams = {
   exclusive?: boolean;
 };
 
-export type TorrentSeederFurrowMode = "ROOT" | "SHADOW" | "UNINITIALIZED";
+export type TorrentSeederFurrowMode = "ROOT" | "SHADOW" | "WAITING";
 
 export type TorrentSubscription = {
   unplant(): void;

@@ -15,7 +15,10 @@ export class TorrentSeederContext {
   protected identity!: TorrentIdentity;
   private _identifier!: string;
   private public_key!: JsonWebKey;
-  private _swarm_key!: ArrayBuffer;
+  // Double-Buffered Key
+  // index 0 is priority this is the expected current swarm key
+  // whilst index 1 is the old key which will be removed after a grace period
+  private _swarm_keys!: ArrayBuffer[];
 
   readonly ctx: TorrentPeerContext;
 
@@ -24,7 +27,7 @@ export class TorrentSeederContext {
 
   readonly unsent?: Set<TorrentMessage>;
 
-  private mode: TorrentSeederFurrowMode = "UNINITIALIZED";
+  private mode: TorrentSeederFurrowMode = "WAITING";
   private current: { root: string; term: number } = {
     root: "",
     term: 0,
@@ -63,19 +66,20 @@ export class TorrentSeederContext {
     return this._identifier;
   }
 
-  get swarm_key(): ArrayBuffer {
-    return this._swarm_key;
+  get swarm_keys(): ArrayBuffer[] {
+    return this._swarm_keys;
   }
 
   async publish(msg: TorrentMessage): Promise<void> {
-    if (this.mode === "UNINITIALIZED" && this.unsent) this.unsent.add(msg);
+    if (this.mode === "WAITING" && this.unsent) this.unsent.add(msg);
     else {
       const message_body = TorrentUtils.to_array_buffer(msg.body);
+      const active_swarm_key = this._swarm_keys[0]!;
       const encrypted = await TorrentUtils.encrypt(
         message_body,
-        this._swarm_key,
+        active_swarm_key,
       );
-      const mac = await TorrentUtils.generate_mac(encrypted, this._swarm_key);
+      const mac = await TorrentUtils.generate_mac(encrypted, active_swarm_key);
       const encrypted_message = new TorrentMessage(
         TorrentUtils.buffer_to_base64(encrypted),
       );
@@ -107,7 +111,7 @@ export class TorrentSeederContext {
   }
 
   private async _flush_unsent(): Promise<void> {
-    if (this.mode === "UNINITIALIZED" || !this.unsent) return;
+    if (this.mode === "WAITING" || !this.unsent) return;
 
     for (const msg of [...this.unsent]) {
       this.publish(msg);
@@ -121,7 +125,10 @@ export class TorrentSeederContext {
       this.swarm_key_interval = null;
     }
 
-    this.swarm_key_interval = setInterval(() => {
+    this.swarm_key_interval = setInterval(async () => {
+      const new_swarm_key = await TorrentUtils.generate_swarm_key();
+      this._set_swarm_key(new_swarm_key);
+
       this.ctx.publish({
         type: "SWARM_KEY_REFRESH",
         seeder: { id: this._identifier, name: this.name },
@@ -189,6 +196,21 @@ export class TorrentSeederContext {
     }, timeout);
   }
 
+  private _set_swarm_key(new_key: ArrayBuffer) {
+    const old_key = this._swarm_keys[0];
+    this._swarm_keys = [new_key, old_key].filter(Boolean) as ArrayBuffer[];
+
+    if (!old_key) return;
+    const refresh_interval = this.options.key_refresh ?? 600000;
+    const grace_period = refresh_interval * 0.8;
+
+    setTimeout(() => {
+      if (this._swarm_keys[1] === old_key) {
+        this._swarm_keys.splice(1, 1);
+      }
+    }, grace_period);
+  }
+
   private _attach_handlers(): void {
     this.ctx.store.on<TorrentControlMessage | TorrentSignalMessage>(
       "set",
@@ -208,11 +230,15 @@ export class TorrentSeederContext {
               this._reset_election_timeout();
               return;
             }
-            if (msg.term > this.current.term) {
+            if (
+              msg.term > this.current.term ||
+              (msg.term === this.current.term &&
+                msg.seeder.id.localeCompare(this.current.root) < 0)
+            ) {
               // we heard from the current leader, so step down if we thought
               // we were the leader, and wait for the next pulse before we
               // consider starting a new election.
-              this.mode = "UNINITIALIZED";
+              this.mode = "WAITING";
               this._clear_intervals();
 
               this.current = { root: msg.seeder.id, term: msg.term };
@@ -242,6 +268,9 @@ export class TorrentSeederContext {
 
           case "SWARM_KEY_REFRESH": {
             if (this.current.root !== msg.seeder.id) return;
+
+            this.mode = "WAITING";
+
             const eph_key = await TorrentEphemeral.create();
             this.eph_exchanges.set(msg.from, eph_key);
 
@@ -263,6 +292,7 @@ export class TorrentSeederContext {
           case "EPH_KEY_OFFER": {
             if (this.mode !== "ROOT" || this.eph_exchanges.size > 0) return;
             const eph_key = await TorrentEphemeral.create();
+            const active_swarm_key = this._swarm_keys[0]!;
 
             const signature = await this.identity.sign(
               TorrentUtils.base64_to_buffer(msg.eph_public_key),
@@ -277,7 +307,7 @@ export class TorrentSeederContext {
               aes_salt,
             );
             const encrypted_swarm_key_array_buffer = await TorrentUtils.encrypt(
-              this._swarm_key,
+              active_swarm_key,
               aes_key,
             );
 
@@ -338,7 +368,7 @@ export class TorrentSeederContext {
             );
 
             if (!swarm_key) return;
-            this._swarm_key = swarm_key;
+            this._set_swarm_key(swarm_key);
             this.mode = "SHADOW"; // ensure to change mode to SHADOW
             this.eph_exchanges.delete(msg.from); // ensure to unset
             // reset all intervals in initiate watch for pulses
@@ -357,6 +387,6 @@ export class TorrentSeederContext {
     this.identity = await TorrentIdentity.create();
     this._identifier = await this.identity.get_identifier();
     this.public_key = (await this.identity.export_public_key()) as JsonWebKey;
-    this._swarm_key = await TorrentUtils.generate_swarm_key();
+    this._set_swarm_key(await TorrentUtils.generate_swarm_key());
   }
 }
