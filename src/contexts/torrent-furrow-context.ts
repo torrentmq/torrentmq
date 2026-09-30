@@ -21,7 +21,7 @@ export class TorrentFurrowContext {
   // Double-Buffered Key
   // index 0 is priority this is the expected current swarm key
   // whilst index 1 is the old key which will be removed after a grace period
-  private _swarm_keys!: ArrayBuffer[];
+  private _swarm_keys: ArrayBuffer[] = [];
 
   protected ctx: TorrentSeederContext;
 
@@ -512,7 +512,8 @@ export class TorrentFurrowContext {
     this.identity = await TorrentIdentity.create();
     this._identifier = await this.identity.get_identifier();
     this.public_key = (await this.identity.export_public_key()) as JsonWebKey;
-    this._set_swarm_key(await TorrentUtils.generate_swarm_key());
+    const initial_swarm_key = await TorrentUtils.generate_swarm_key();
+    this._set_swarm_key(initial_swarm_key);
     // set routing keys if passed in
     this._routing_keys = new Set(this.options.routing_keys);
   }
