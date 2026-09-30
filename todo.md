@@ -6,7 +6,4 @@
 - [x] double buffered keys
 - [ ] transfer routing_keys modifications between all instances of a furrow
 - [x] write new docs
-
-### later
-
 - [ ] handle message on ack

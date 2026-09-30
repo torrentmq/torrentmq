@@ -73,7 +73,7 @@ export class TorrentSeeder {
       else if (arg !== undefined) body = arg;
     }
 
-    const message = new TorrentMessage(body, {
+    const message = new TorrentMessage(this.ctx, body, {
       ...params,
       source: this.peer_ctx.identifier,
     });

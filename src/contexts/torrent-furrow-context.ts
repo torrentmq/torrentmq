@@ -76,6 +76,10 @@ export class TorrentFurrowContext {
     return this.ctx.ctx;
   }
 
+  get seeder_ctx(): TorrentSeederContext {
+    return this.ctx;
+  }
+
   get plant_callbacks(): Set<TorrentCallback> {
     return this._plant_callbacks;
   }
@@ -95,6 +99,7 @@ export class TorrentFurrowContext {
       );
       const mac = await TorrentUtils.generate_mac(encrypted, active_swarm_key);
       const encrypted_message = new TorrentMessage(
+        this,
         TorrentUtils.buffer_to_base64(encrypted),
       );
       const encrypted_message_body = TorrentUtils.to_array_buffer(
@@ -111,7 +116,7 @@ export class TorrentFurrowContext {
       this.peer_ctx.publish({
         type: "PUBLISH",
         seeder: { id: this.ctx.identifier, name: this.ctx.name },
-        furrow: { id: this.ctx.identifier, name: this.ctx.name },
+        furrow: { id: this._identifier, name: this.name },
         message: {
           body: encrypted_message.body,
           properties: msg?.properties,
@@ -302,6 +307,7 @@ export class TorrentFurrowContext {
             if (!decrypted_msg) return;
             const message_body = TorrentUtils.from_array_buffer(decrypted_msg);
             const message = new TorrentMessage(
+              this,
               message_body as TorrentMessageBody,
             );
 

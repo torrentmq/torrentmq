@@ -81,6 +81,7 @@ export class TorrentSeederContext {
       );
       const mac = await TorrentUtils.generate_mac(encrypted, active_swarm_key);
       const encrypted_message = new TorrentMessage(
+        this,
         TorrentUtils.buffer_to_base64(encrypted),
       );
       const encrypted_message_body = TorrentUtils.to_array_buffer(
@@ -95,7 +96,7 @@ export class TorrentSeederContext {
 
       this.ctx.publish({
         type: "PUBLISH",
-        seeder: { id: this.ctx.identifier, name: this.name },
+        seeder: { id: this._identifier, name: this.name },
         message: {
           body: encrypted_message.body,
           properties: msg?.properties,
